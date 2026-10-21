@@ -1,24 +1,101 @@
-// DIY smartwatch - step 1: NTP-synced clock on a GC9A01 round display
-// Wiring (ESP32-S3 -> display): 3V3->VCC, GND->GND, 12->SCL, 11->SDA,
-// 10->CS, 9->DC, 8->RST, 7->BL
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <TFT_eSPI.h>
 #include <time.h>
+#include "secrets.h"  // WIFI_SSID and WIFI_PASS live here
 
-// ---- EDIT THESE ----
-const char* WIFI_SSID = "YOUR_WIFI_NAME";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 // UK time with automatic BST/GMT switching
 const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0";
-// --------------------
+
+const uint8_t  PIN_BTN_A = 4;
+const uint8_t  PIN_BTN_B = 5;
+const uint32_t DEBOUNCE_MS = 30;
+const uint32_t LONG_PRESS_MS = 800;
+const uint32_t SCREEN_TIMEOUT_MS = 5000;          // normal screen-off delay
+const uint32_t STOPWATCH_TIMEOUT_MS = 15000;      // longer while timing
 
 TFT_eSPI tft = TFT_eSPI();
-TFT_eSprite spr = TFT_eSprite(&tft);  // full-screen buffer in PSRAM, no flicker
+TFT_eSprite spr = TFT_eSprite(&tft);  // full-screen buffer in PSRAM
 
 const int CX = 120;
 const int CY = 120;
+
+// ---------------------------------------------------------------- buttons
+
+enum BtnEvent { EV_NONE, EV_DOWN, EV_SHORT, EV_LONG };
+
+struct Button {
+  uint8_t  pin;
+  bool     lastRaw;
+  bool     stable;
+  uint32_t lastChange;
+  uint32_t pressedAt;
+  bool     longFired;
+  bool     consume;   // swallow the rest of this press (used when it woke the screen)
+};
+
+Button btnA = {PIN_BTN_A, false, false, 0, 0, false, false};
+Button btnB = {PIN_BTN_B, false, false, 0, 0, false, false};
+
+// Call every loop. Returns at most one event per call:
+//   EV_DOWN  - the moment the button is pressed
+//   EV_SHORT - released after a short press
+//   EV_LONG  - held past LONG_PRESS_MS (fires once, while still held)
+static BtnEvent updateButton(Button& b) {
+  uint32_t now = millis();
+  bool raw = (digitalRead(b.pin) == LOW);  // pressed = LOW (pull-up)
+  if (raw != b.lastRaw) {
+    b.lastRaw = raw;
+    b.lastChange = now;
+  }
+
+  BtnEvent ev = EV_NONE;
+  if (now - b.lastChange >= DEBOUNCE_MS && raw != b.stable) {
+    b.stable = raw;
+    if (b.stable) {
+      b.pressedAt = now;
+      b.longFired = false;
+      ev = EV_DOWN;
+    } else {
+      if (!b.longFired && !b.consume) ev = EV_SHORT;
+      b.consume = false;
+    }
+  }
+
+  if (ev == EV_NONE && b.stable && !b.longFired && !b.consume &&
+      now - b.pressedAt >= LONG_PRESS_MS) {
+    b.longFired = true;
+    ev = EV_LONG;
+  }
+  return ev;
+}
+
+// ------------------------------------------------------------- stopwatch
+
+bool     swRunning = false;
+uint32_t swStartMs = 0;     // millis() when it was last started
+uint32_t swBaseMs = 0;      // time accumulated before the current run
+
+static uint32_t stopwatchElapsed() {
+  return swRunning ? swBaseMs + (millis() - swStartMs) : swBaseMs;
+}
+
+static void stopwatchToggle() {
+  if (swRunning) {
+    swBaseMs += millis() - swStartMs;
+    swRunning = false;
+  } else {
+    swStartMs = millis();
+    swRunning = true;
+  }
+}
+
+static void stopwatchReset() {
+  swRunning = false;
+  swBaseMs = 0;
+}
+
+// --------------------------------------------------------------- drawing
 
 static void drawHand(float angleDeg, int length, int width, uint16_t color) {
   float a = (angleDeg - 90.0f) * DEG_TO_RAD;
@@ -28,9 +105,7 @@ static void drawHand(float angleDeg, int length, int width, uint16_t color) {
 }
 
 static void drawFace() {
-  // outer ring
   spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
-  // hour ticks
   for (int i = 0; i < 12; i++) {
     float a = i * 30 * DEG_TO_RAD;
     int r1 = (i % 3 == 0) ? 98 : 106;
@@ -45,7 +120,6 @@ static void drawClock(const struct tm& t) {
   spr.fillSprite(TFT_BLACK);
   drawFace();
 
-  // date (top) and digital time (bottom)
   char buf[24];
   strftime(buf, sizeof(buf), "%a %d %b", &t);
   spr.setTextColor(TFT_CYAN, TFT_BLACK);
@@ -56,7 +130,6 @@ static void drawClock(const struct tm& t) {
   spr.setTextColor(TFT_WHITE, TFT_BLACK);
   spr.drawString(buf, CX, 170, 4);
 
-  // hands
   float secA = t.tm_sec * 6.0f;
   float minA = t.tm_min * 6.0f + t.tm_sec * 0.1f;
   float hrA  = (t.tm_hour % 12) * 30.0f + t.tm_min * 0.5f;
@@ -64,6 +137,32 @@ static void drawClock(const struct tm& t) {
   drawHand(minA, 85, 4, TFT_WHITE);
   drawHand(secA, 95, 2, TFT_RED);
   spr.fillCircle(CX, CY, 6, TFT_RED);
+
+  spr.pushSprite(0, 0);
+}
+
+static void drawStopwatch() {
+  uint32_t totalTenths = stopwatchElapsed() / 100;
+  unsigned tenths = totalTenths % 10;
+  unsigned secs = (totalTenths / 10) % 60;
+  unsigned mins = (totalTenths / 600) % 100;
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%02u:%02u.%u", mins, secs, tenths);
+
+  spr.fillSprite(TFT_BLACK);
+  spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
+  spr.setTextDatum(MC_DATUM);
+
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
+  spr.drawString("STOPWATCH", CX, 55, 2);
+
+  spr.setTextColor(swRunning ? TFT_GREEN : TFT_WHITE, TFT_BLACK);
+  spr.drawString(buf, CX, 120, 6);
+
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.drawString("A: start / stop", CX, 185, 2);
+  spr.drawString("hold A: reset", CX, 205, 2);
 
   spr.pushSprite(0, 0);
 }
@@ -76,9 +175,23 @@ static void status(const char* msg) {
   Serial.println(msg);
 }
 
+// ----------------------------------------------------------------- state
+
+enum Screen { SCREEN_WATCH, SCREEN_STOPWATCH, SCREEN_COUNT };
+
+Screen   screen = SCREEN_WATCH;
+bool     screenOn = true;
+bool     needRedraw = true;
+uint32_t lastActivity = 0;
+
+// ----------------------------------------------------------------- setup
+
 void setup() {
   Serial.begin(115200);
   delay(500);
+
+  pinMode(PIN_BTN_A, INPUT_PULLUP);
+  pinMode(PIN_BTN_B, INPUT_PULLUP);
 
   pinMode(TFT_BL, OUTPUT);
   digitalWrite(TFT_BL, HIGH);
@@ -87,7 +200,6 @@ void setup() {
   tft.setRotation(0);
   status("Starting...");
 
-  // Full-screen sprite: 240*240*2 bytes = ~115KB, lives in PSRAM
   spr.setColorDepth(16);
   spr.setAttribute(PSRAM_ENABLE, 1);
   if (!spr.createSprite(240, 240)) {
@@ -95,7 +207,6 @@ void setup() {
     while (true) delay(1000);
   }
 
-  // Connect to Wi-Fi and sync time
   status("Connecting WiFi...");
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -105,16 +216,11 @@ void setup() {
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    // Network diagnostics (visible in the serial monitor)
     Serial.printf("IP %s  GW %s  DNS %s  RSSI %d\n",
                   WiFi.localIP().toString().c_str(),
                   WiFi.gatewayIP().toString().c_str(),
                   WiFi.dnsIP().toString().c_str(),
                   WiFi.RSSI());
-    IPAddress ntpIp;
-    bool dnsOk = WiFi.hostByName("pool.ntp.org", ntpIp);
-    Serial.printf("DNS lookup pool.ntp.org: %s (%s)\n",
-                  dnsOk ? "OK" : "FAILED", ntpIp.toString().c_str());
 
     status("Syncing time...");
     configTzTime(TZ_INFO, "time.cloudflare.com", "pool.ntp.org", "time.google.com");
@@ -128,25 +234,82 @@ void setup() {
       status("NTP sync failed");
       delay(2000);
     }
-    // Radio off after sync: saves a lot of power
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
   } else {
     status("WiFi failed");
     delay(2000);
-    // Falls back to 1970 time; check SSID/password and reboot
   }
+
+  lastActivity = millis();
+  screenOn = true;
+  needRedraw = true;
 }
 
-void loop() {
-  static int lastSec = -1;
-  time_t now = time(nullptr);
-  struct tm t;
-  localtime_r(&now, &t);
+// ------------------------------------------------------------------ loop
 
-  if (t.tm_sec != lastSec) {
-    lastSec = t.tm_sec;
-    drawClock(t);
+void loop() {
+  uint32_t now = millis();
+
+  BtnEvent evA = updateButton(btnA);
+  BtnEvent evB = updateButton(btnB);
+
+  // Wake on any press. The rest of that press is ignored, so waking
+  // the screen never also triggers an action.
+  bool wokeNow = false;
+  if ((evA == EV_DOWN || evB == EV_DOWN) && !screenOn) {
+    screenOn = true;
+    wokeNow = true;
+    needRedraw = true;
+    digitalWrite(TFT_BL, HIGH);
+    if (evA == EV_DOWN) btnA.consume = true;
+    if (evB == EV_DOWN) btnB.consume = true;
   }
-  delay(20);
+  if (evA != EV_NONE || evB != EV_NONE) lastActivity = now;
+
+  // Actions (only when the screen was already on)
+  if (screenOn && !wokeNow) {
+    if (evB == EV_SHORT) {
+      screen = (Screen)((screen + 1) % SCREEN_COUNT);
+      needRedraw = true;
+    }
+    if (screen == SCREEN_STOPWATCH) {
+      if (evA == EV_SHORT) { stopwatchToggle(); needRedraw = true; }
+      if (evA == EV_LONG)  { stopwatchReset();  needRedraw = true; }
+    }
+  }
+
+  // Screen timeout (longer while the stopwatch is running)
+  uint32_t timeout = (screen == SCREEN_STOPWATCH && swRunning)
+                         ? STOPWATCH_TIMEOUT_MS
+                         : SCREEN_TIMEOUT_MS;
+  if (screenOn && now - lastActivity > timeout) {
+    screenOn = false;
+    digitalWrite(TFT_BL, LOW);
+  }
+
+  // Draw only while the screen is on
+  if (screenOn) {
+    static int lastSec = -1;
+    static uint32_t lastDraw = 0;
+
+    if (screen == SCREEN_WATCH) {
+      time_t nowT = time(nullptr);
+      struct tm t;
+      localtime_r(&nowT, &t);
+      if (needRedraw || t.tm_sec != lastSec) {
+        lastSec = t.tm_sec;
+        drawClock(t);
+        needRedraw = false;
+      }
+    } else {
+      if (needRedraw || now - lastDraw >= 100) {
+        lastDraw = now;
+        drawStopwatch();
+        needRedraw = false;
+      }
+    }
+  }
+
+  delay(10);
 }
