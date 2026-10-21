@@ -1,7 +1,26 @@
+// DIY smartwatch - screens: analogue, digital, stopwatch, music remote
+//
+// Display (ESP32-S3 -> GC9A01): 3V3->VCC, GND->GND, 12->SCL, 11->SDA,
+//                               10->CS, 9->DC, 8->RST, 7->BL
+// Buttons: GPIO 4 = button A, GPIO 5 = button B (other leg of each to GND)
+//
+// Controls:
+//   B (short)  : next screen
+//   Stopwatch  : A = start / stop, hold A = reset
+//   Music      : B = choose control, A = send it, hold B = next screen
+//
+// Music remote: the watch appears to the iPhone as a Bluetooth media-key
+// accessory called "Solomon's ESP32 Watch". Pair it once in Settings > Bluetooth.
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <TFT_eSPI.h>
 #include <time.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLEHIDDevice.h>
+#include <BLESecurity.h>
 #include "secrets.h"  // WIFI_SSID and WIFI_PASS live here
 
 // UK time with automatic BST/GMT switching
@@ -93,6 +112,108 @@ static void stopwatchToggle() {
 static void stopwatchReset() {
   swRunning = false;
   swBaseMs = 0;
+}
+
+// ------------------------------------------------- music remote (BLE HID)
+
+#define BLE_DEVICE_NAME "Solomon's ESP32 Watch"
+
+// HID report: Consumer Control, report ID 1, one byte of 5 button bits.
+static const uint8_t mediaReportMap[] = {
+  0x05, 0x0C,  // Usage Page (Consumer)
+  0x09, 0x01,  // Usage (Consumer Control)
+  0xA1, 0x01,  // Collection (Application)
+  0x85, 0x01,  //   Report ID (1)
+  0x15, 0x00,  //   Logical Minimum (0)
+  0x25, 0x01,  //   Logical Maximum (1)
+  0x75, 0x01,  //   Report Size (1)
+  0x95, 0x05,  //   Report Count (5)
+  0x09, 0xCD,  //   Play/Pause          (bit 0)
+  0x09, 0xB5,  //   Scan Next Track     (bit 1)
+  0x09, 0xB6,  //   Scan Previous Track (bit 2)
+  0x09, 0xE9,  //   Volume Increment    (bit 3)
+  0x09, 0xEA,  //   Volume Decrement    (bit 4)
+  0x81, 0x02,  //   Input (Data, Variable, Absolute)
+  0x75, 0x03,  //   Report Size (3)
+  0x95, 0x01,  //   Report Count (1)
+  0x81, 0x03,  //   Input (Constant) - padding to a full byte
+  0xC0         // End Collection
+};
+
+const uint8_t KEY_PLAY_PAUSE = 1 << 0;
+const uint8_t KEY_NEXT       = 1 << 1;
+const uint8_t KEY_PREV       = 1 << 2;
+const uint8_t KEY_VOL_UP     = 1 << 3;
+const uint8_t KEY_VOL_DOWN   = 1 << 4;
+
+BLEServer*         bleServer = nullptr;
+BLEHIDDevice*      bleHid = nullptr;
+BLECharacteristic* mediaInput = nullptr;
+volatile bool      bleConnected = false;
+
+class BleServerCallbacks : public BLEServerCallbacks {
+  void onConnect(BLEServer*) override { bleConnected = true; }
+  void onDisconnect(BLEServer*) override {
+    bleConnected = false;
+    BLEDevice::startAdvertising();  // stay discoverable so the iPhone reconnects
+  }
+};
+
+static void startBle() {
+  BLEDevice::init(BLE_DEVICE_NAME);
+  bleServer = BLEDevice::createServer();
+  bleServer->setCallbacks(new BleServerCallbacks());
+
+  bleHid = new BLEHIDDevice(bleServer);
+  mediaInput = bleHid->inputReport(1);  // report ID 1
+  bleHid->pnp(0x02, 0xe502, 0xa111, 0x0210);
+  bleHid->hidInfo(0x00, 0x01);
+
+  // Bonding ("just works"), the setting iOS accepts for BLE keyboards
+  BLESecurity* security = new BLESecurity();
+  security->setAuthenticationMode(ESP_LE_AUTH_BOND);
+
+  bleHid->reportMap((uint8_t*)mediaReportMap, sizeof(mediaReportMap));
+  bleHid->startServices();
+
+  BLEAdvertising* adv = bleServer->getAdvertising();
+  adv->setAppearance(0x03C0);  // generic HID device
+  adv->addServiceUUID(bleHid->hidService()->getUUID());
+  adv->setScanResponse(false);
+  adv->start();
+
+  bleHid->setBatteryLevel(100);
+}
+
+// Press and release one media key. Returns false if no iPhone is connected.
+static bool sendMediaKey(uint8_t mask) {
+  if (!bleConnected || !mediaInput) return false;
+  uint8_t report = mask;
+  mediaInput->setValue(&report, 1);
+  mediaInput->notify();
+  delay(20);
+  report = 0;
+  mediaInput->setValue(&report, 1);
+  mediaInput->notify();
+  delay(10);
+  return true;
+}
+
+// Controls shown on the Music screen, left to right
+const int MUSIC_COUNT = 5;
+const uint8_t MUSIC_MASKS[MUSIC_COUNT] = {KEY_VOL_DOWN, KEY_PREV, KEY_PLAY_PAUSE,
+                                          KEY_NEXT, KEY_VOL_UP};
+const char* const MUSIC_NAMES[MUSIC_COUNT] = {"Volume down", "Previous",
+                                              "Play / Pause", "Next", "Volume up"};
+int      musicSel = 2;          // start on Play / Pause
+int      musicFlashIdx = -1;
+uint32_t musicFlashAt = 0;
+bool     musicFlashOk = true;
+
+static void musicSend(int idx) {
+  musicFlashIdx = idx;
+  musicFlashAt = millis();
+  musicFlashOk = sendMediaKey(MUSIC_MASKS[idx]);
 }
 
 // --------------------------------------------------------------- drawing
@@ -192,6 +313,72 @@ static void drawStopwatch() {
   spr.pushSprite(0, 0);
 }
 
+// One control icon on the Music screen
+static void drawMusicIcon(int idx, int x, int y, bool selected, bool flashing) {
+  if (flashing) spr.fillCircle(x, y, 16, musicFlashOk ? TFT_DARKGREEN : TFT_MAROON);
+  if (selected) {
+    spr.drawCircle(x, y, 18, TFT_YELLOW);
+    spr.drawCircle(x, y, 19, TFT_YELLOW);
+  }
+  uint16_t c = TFT_WHITE;
+  switch (idx) {
+    case 0:  // volume down
+      spr.setTextColor(c);
+      spr.drawString("V-", x, y, 2);
+      break;
+    case 1:  // previous
+      spr.fillTriangle(x + 7, y - 8, x + 7, y + 8, x - 5, y, c);
+      spr.fillRect(x - 9, y - 8, 3, 17, c);
+      break;
+    case 2:  // play / pause
+      spr.fillTriangle(x - 10, y - 8, x - 10, y + 8, x, y, c);
+      spr.fillRect(x + 4, y - 8, 3, 17, c);
+      spr.fillRect(x + 9, y - 8, 3, 17, c);
+      break;
+    case 3:  // next
+      spr.fillTriangle(x - 7, y - 8, x - 7, y + 8, x + 5, y, c);
+      spr.fillRect(x + 6, y - 8, 3, 17, c);
+      break;
+    case 4:  // volume up
+      spr.setTextColor(c);
+      spr.drawString("V+", x, y, 2);
+      break;
+  }
+}
+
+static void drawMusic() {
+  spr.fillSprite(TFT_BLACK);
+  spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
+  spr.setTextDatum(MC_DATUM);
+
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
+  spr.drawString("MUSIC", CX, 45, 2);
+
+  spr.setTextColor(bleConnected ? TFT_GREEN : TFT_ORANGE, TFT_BLACK);
+  spr.drawString(bleConnected ? "iPhone connected" : "Not connected", CX, 68, 2);
+
+  uint32_t now = millis();
+  for (int i = 0; i < MUSIC_COUNT; i++) {
+    bool flashing = (i == musicFlashIdx) && (now - musicFlashAt < 250);
+    drawMusicIcon(i, 40 + i * 40, 120, i == musicSel, flashing);
+  }
+
+  spr.setTextColor(TFT_WHITE, TFT_BLACK);
+  spr.drawString(MUSIC_NAMES[musicSel], CX, 156, 2);
+
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  if (bleConnected) {
+    spr.drawString("A: send  B: select", CX, 188, 2);
+    spr.drawString("hold B: next screen", CX, 206, 2);
+  } else {
+    spr.drawString("Pair \"ESP32 Watch\" in", CX, 188, 2);
+    spr.drawString("iPhone Bluetooth", CX, 206, 2);
+    spr.drawString("hold B: exit", CX, 224, 2);
+  }
+
+  spr.pushSprite(0, 0);
+}
+
 static void status(const char* msg) {
   tft.fillScreen(TFT_BLACK);
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
@@ -202,18 +389,15 @@ static void status(const char* msg) {
 
 // ----------------------------------------------------------------- state
 
-// enum Screen { SCREEN_WATCH, SCREEN_STOPWATCH, SCREEN_COUNT };
-
 enum Screen {
   SCREEN_ANALOGUE,
   SCREEN_DIGITAL,
   SCREEN_STOPWATCH,
+  SCREEN_MUSIC,
   SCREEN_COUNT
 };
 
-Screen screen = SCREEN_ANALOGUE;
-
-// Screen   screen = SCREEN_WATCH;
+Screen   screen = SCREEN_ANALOGUE;
 bool     screenOn = true;
 bool     needRedraw = true;
 uint32_t lastActivity = 0;
@@ -273,7 +457,12 @@ void setup() {
   } else {
     status("WiFi failed");
     delay(2000);
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);  // keep the radio quiet so Bluetooth has it to itself
   }
+
+  status("Starting Bluetooth...");
+  startBle();
 
   lastActivity = millis();
   screenOn = true;
@@ -303,13 +492,29 @@ void loop() {
 
   // Actions (only when the screen was already on)
   if (screenOn && !wokeNow) {
-    if (evB == EV_SHORT) {
-      screen = (Screen)((screen + 1) % SCREEN_COUNT);
-      needRedraw = true;
-    }
-    if (screen == SCREEN_STOPWATCH) {
-      if (evA == EV_SHORT) { stopwatchToggle(); needRedraw = true; }
-      if (evA == EV_LONG)  { stopwatchReset();  needRedraw = true; }
+    if (screen == SCREEN_MUSIC) {
+      // Music: B picks a control, A sends it, hold B leaves the screen
+      if (evB == EV_SHORT) {
+        musicSel = (musicSel + 1) % MUSIC_COUNT;
+        needRedraw = true;
+      }
+      if (evB == EV_LONG) {
+        screen = (Screen)((screen + 1) % SCREEN_COUNT);
+        needRedraw = true;
+      }
+      if (evA == EV_SHORT) {
+        musicSend(musicSel);
+        needRedraw = true;
+      }
+    } else {
+      if (evB == EV_SHORT) {
+        screen = (Screen)((screen + 1) % SCREEN_COUNT);
+        needRedraw = true;
+      }
+      if (screen == SCREEN_STOPWATCH) {
+        if (evA == EV_SHORT) { stopwatchToggle(); needRedraw = true; }
+        if (evA == EV_LONG)  { stopwatchReset();  needRedraw = true; }
+      }
     }
   }
 
@@ -331,29 +536,35 @@ void loop() {
     static int lastSec = -1;
     static uint32_t lastDraw = 0;
 
-  if (screen == SCREEN_ANALOGUE || screen == SCREEN_DIGITAL) {
-    time_t nowT = time(nullptr);
-    struct tm t;
-    localtime_r(&nowT, &t);
+    if (screen == SCREEN_ANALOGUE || screen == SCREEN_DIGITAL) {
+      time_t nowT = time(nullptr);
+      struct tm t;
+      localtime_r(&nowT, &t);
 
-    if (needRedraw || t.tm_sec != lastSec) {
-      lastSec = t.tm_sec;
+      if (needRedraw || t.tm_sec != lastSec) {
+        lastSec = t.tm_sec;
 
-      if (screen == SCREEN_ANALOGUE) {
-        drawClock(t);
-      } else {
-        drawDigitalClock(t);
+        if (screen == SCREEN_ANALOGUE) {
+          drawClock(t);
+        } else {
+          drawDigitalClock(t);
+        }
+
+        needRedraw = false;
       }
-
-      needRedraw = false;
+    } else if (screen == SCREEN_STOPWATCH) {
+      if (needRedraw || now - lastDraw >= 100) {
+        lastDraw = now;
+        drawStopwatch();
+        needRedraw = false;
+      }
+    } else {  // SCREEN_MUSIC (refreshes ~4x/s for connection status + key flash)
+      if (needRedraw || now - lastDraw >= 250) {
+        lastDraw = now;
+        drawMusic();
+        needRedraw = false;
+      }
     }
-  } else {
-    if (needRedraw || now - lastDraw >= 100) {
-      lastDraw = now;
-      drawStopwatch();
-      needRedraw = false;
-    }
-  }
   }
 
   delay(10);
