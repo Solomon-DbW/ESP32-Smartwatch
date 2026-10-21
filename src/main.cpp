@@ -12,22 +12,22 @@
 // Music remote: the watch appears to the iPhone as a Bluetooth media-key
 // accessory called "Solomon's ESP32 Watch". Pair it once in Settings > Bluetooth.
 
-#include <Arduino.h>
-#include <WiFi.h>
-#include <TFT_eSPI.h>
-#include <time.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLEHIDDevice.h>
-#include <BLESecurity.h>
-#include "secrets.h"  // WIFI_SSID and WIFI_PASS live here
+#include <Arduino.h>                            // Arduino functions e.g. pinMode(), digitalRead(), millis(), delay() and Serial
+#include <WiFi.h>                               // Connects to a wireless network and obtains network information
+#include <TFT_eSPI.h>                           // Controls the TFT display (the GC9A01), draws shapes and text, and manages sprites
+#include <time.h>                               // Provides time_t, struct tm, strftime() and time conversion functions
+#include <BLEDevice.h>                          // Initialises the ESP32 Bluetooth Low Energy stack
+#include <BLEServer.h>                          // Creates a BLE peripheral server and connection callbacks
+#include <BLEUtils.h>                           // Provides BLE utilities and related definitions
+#include <BLEHIDDevice.h>                       // Implements the Bluetooth Human Interface Device service
+#include <BLESecurity.h>                        // Configures BLE pairing and bonding behaviour
+#include "secrets.h"                            // WIFI_SSID and WIFI_PASS live here
 
 // UK time with automatic BST/GMT switching
 const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0";
 
-const uint8_t  PIN_BTN_A = 4;
-const uint8_t  PIN_BTN_B = 5;
+const uint8_t  PIN_BTN_A = 4;                     // Button A connected to GPIO 4
+const uint8_t  PIN_BTN_B = 5;                     // Button B connected to GPIO 5
 const uint32_t DEBOUNCE_MS = 30;
 const uint32_t LONG_PRESS_MS = 800;
 const uint32_t SCREEN_TIMEOUT_MS = 5000;          // normal screen-off delay
