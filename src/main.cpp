@@ -12,6 +12,7 @@
 // Music remote: the watch appears to the iPhone as a Bluetooth media-key
 // accessory called "Solomon's ESP32 Watch". Pair it once in Settings > Bluetooth.
 
+// P.S. : Variables are specified as [xyz...] in the comments for readability
 // P.S. : [#include <...>] normally refers to a library or system header, while [#include "..."] normally searches for a local project header first.
 
 #include <Arduino.h>                            // Arduino functions e.g. pinMode(), digitalRead(), millis(), delay() and Serial
@@ -37,8 +38,12 @@ const uint32_t LONG_PRESS_MS = 800;               // Duration required for a lon
 const uint32_t SCREEN_TIMEOUT_MS = 5000;          // normal screen-off delay               <=========|
 const uint32_t STOPWATCH_TIMEOUT_MS = 15000;      // longer while timing                   <=========|
 
-TFT_eSPI tft = TFT_eSPI();
-TFT_eSprite spr = TFT_eSprite(&tft);  // full-screen buffer in PSRAM
+TFT_eSPI tft = TFT_eSPI();                        // Constructs a C++ TFT_eSPI object named tft that provides operations like [tft.init()], [tft.setRotation(0);], [tft.fillScreen(TFT_BLACK);] and [tft.drawString("Hello", 120, 120, 2);]
+
+TFT_eSprite spr = TFT_eSprite(&tft); /* A sprite is an off-screen drawing buffer. 
+                                        Here it is associated with the physical display using [&tft], which passes the address of the [tft] object.
+                                        Instead of drawing each shape directly to the display as it is calculated,
+                                        the program draws a complete screen into the sprite and then transfers it with:*/
 
 const int CX = 120;
 const int CY = 120;
