@@ -40,26 +40,30 @@ const uint32_t STOPWATCH_TIMEOUT_MS = 15000;      // longer while timing        
 
 TFT_eSPI tft = TFT_eSPI();                        // Constructs a C++ TFT_eSPI object named tft that provides operations like [tft.init()], [tft.setRotation(0);], [tft.fillScreen(TFT_BLACK);] and [tft.drawString("Hello", 120, 120, 2);]
 
-TFT_eSprite spr = TFT_eSprite(&tft); /* A sprite is an off-screen drawing buffer. 
-                                        Here it is associated with the physical display using [&tft], which passes the address of the [tft] object.
-                                        Instead of drawing each shape directly to the display as it is calculated,
-                                        the program draws a complete screen into the sprite and then transfers it with:*/
+TFT_eSprite spr = TFT_eSprite(&tft);              /* A sprite is an off-screen drawing buffer. 
+                                                    Here it is associated with the physical display using [&tft], which passes the address of the [tft] object.
+                                                    Instead of drawing each shape directly to the display as it is calculated,
+                                                    the program draws a complete screen into the sprite and then transfers it with:*/
 
-const int CX = 120;
-const int CY = 120;
+const int CX = 120;                               // <=====|---------> (CX, CY) is the centre of the GC9A01 display, which is a 240 x 240 display
+const int CY = 120;                               // <=====|
 
 // ---------------------------------------------------------------- buttons
 
-enum BtnEvent { EV_NONE, EV_DOWN, EV_SHORT, EV_LONG };
+enum BtnEvent { EV_NONE, EV_DOWN, EV_SHORT, EV_LONG };  /* [BtnEvent] defines a set of named integer constants
+                                                           (default values of {0, 1, 2, 3})
+                                                           that identify different button events 
+                                                           {No new event, button press, button released quickly, button held for >= 800ms}*/
 
+// Struct group [Button] related variables into a single data type.
 struct Button {
-  uint8_t  pin;
-  bool     lastRaw;
-  bool     stable;
-  uint32_t lastChange;
-  uint32_t pressedAt;
-  bool     longFired;
-  bool     consume;   // swallow the rest of this press (used when it woke the screen)
+  uint8_t  pin;         // GPIO number associated with the button
+  bool     lastRaw;     // Most recently observed electrical state, after interpreting LOW as pressed
+  bool     stable;      // Last debounced state accepted by the program
+  uint32_t lastChange;  // Time at which the raw signal most recently changed
+  uint32_t pressedAt;   // Time at which the press became a stable, recognised press.
+  bool     longFired;   // Prevents the long-press event from firing repeatedly during one hold.
+  bool     consume;     // Suppresses the remaining events from a press used to wake the screen.
 };
 
 Button btnA = {PIN_BTN_A, false, false, 0, 0, false, false};
