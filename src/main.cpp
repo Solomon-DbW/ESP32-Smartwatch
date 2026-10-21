@@ -141,6 +141,31 @@ static void drawClock(const struct tm& t) {
   spr.pushSprite(0, 0);
 }
 
+static void drawDigitalClock(const struct tm& t) {
+  spr.fillSprite(TFT_BLACK);
+
+  // Date
+  char dateBuf[24];
+  strftime(dateBuf, sizeof(dateBuf), "%a %d %b", &t);
+
+  spr.setTextDatum(MC_DATUM);
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
+  spr.drawString(dateBuf, CX, 65, 2);
+
+  // Digital time
+  char timeBuf[12];
+  strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", &t);
+
+  spr.setTextColor(TFT_WHITE, TFT_BLACK);
+  spr.drawString(timeBuf, CX, 115, 4);
+
+  // Seconds indicator
+  spr.drawCircle(CX, 165, 5, TFT_GREEN);
+  spr.fillCircle(CX, 165, 3, TFT_GREEN);
+
+  spr.pushSprite(0, 0);
+}
+
 static void drawStopwatch() {
   uint32_t totalTenths = stopwatchElapsed() / 100;
   unsigned tenths = totalTenths % 10;
@@ -177,9 +202,18 @@ static void status(const char* msg) {
 
 // ----------------------------------------------------------------- state
 
-enum Screen { SCREEN_WATCH, SCREEN_STOPWATCH, SCREEN_COUNT };
+// enum Screen { SCREEN_WATCH, SCREEN_STOPWATCH, SCREEN_COUNT };
 
-Screen   screen = SCREEN_WATCH;
+enum Screen {
+  SCREEN_ANALOGUE,
+  SCREEN_DIGITAL,
+  SCREEN_STOPWATCH,
+  SCREEN_COUNT
+};
+
+Screen screen = SCREEN_ANALOGUE;
+
+// Screen   screen = SCREEN_WATCH;
 bool     screenOn = true;
 bool     needRedraw = true;
 uint32_t lastActivity = 0;
@@ -297,22 +331,29 @@ void loop() {
     static int lastSec = -1;
     static uint32_t lastDraw = 0;
 
-    if (screen == SCREEN_WATCH) {
-      time_t nowT = time(nullptr);
-      struct tm t;
-      localtime_r(&nowT, &t);
-      if (needRedraw || t.tm_sec != lastSec) {
-        lastSec = t.tm_sec;
+  if (screen == SCREEN_ANALOGUE || screen == SCREEN_DIGITAL) {
+    time_t nowT = time(nullptr);
+    struct tm t;
+    localtime_r(&nowT, &t);
+
+    if (needRedraw || t.tm_sec != lastSec) {
+      lastSec = t.tm_sec;
+
+      if (screen == SCREEN_ANALOGUE) {
         drawClock(t);
-        needRedraw = false;
+      } else {
+        drawDigitalClock(t);
       }
-    } else {
-      if (needRedraw || now - lastDraw >= 100) {
-        lastDraw = now;
-        drawStopwatch();
-        needRedraw = false;
-      }
+
+      needRedraw = false;
     }
+  } else {
+    if (needRedraw || now - lastDraw >= 100) {
+      lastDraw = now;
+      drawStopwatch();
+      needRedraw = false;
+    }
+  }
   }
 
   delay(10);
