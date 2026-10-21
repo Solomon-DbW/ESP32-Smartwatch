@@ -12,17 +12,6 @@
 // Music remote: the watch appears to the iPhone as a Bluetooth media-key
 // accessory called "Solomon's ESP32 Watch". Pair it once in Settings > Bluetooth.
 
-#include <Arduino.h>                            // Arduino functions e.g. pinMode(), digitalRead(), millis(), delay() and Serial
-#include <WiFi.h>                               // Connects to a wireless network and obtains network information
-#include <TFT_eSPI.h>                           // Controls the TFT display (the GC9A01), draws shapes and text, and manages sprites
-#include <time.h>                               // Provides time_t, struct tm, strftime() and time conversion functions
-#include <BLEDevice.h>                          // Initialises the ESP32 Bluetooth Low Energy stack
-#include <BLEServer.h>                          // Creates a BLE peripheral server and connection callbacks
-#include <BLEUtils.h>                           // Provides BLE utilities and related definitions
-#include <BLEHIDDevice.h>
-#include <BLESecurity.h>
-#include "secrets.h"  // WIFI_SSID and WIFI_PASS live here
-
 // P.S. : [#include <...>] normally refers to a library or system header, while [#include "..."] normally searches for a local project header first.
 
 #include <Arduino.h>                            // Arduino functions e.g. pinMode(), digitalRead(), millis(), delay() and Serial
