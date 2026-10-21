@@ -279,14 +279,18 @@ void loop() {
     }
   }
 
-  // Screen timeout (longer while the stopwatch is running)
-  uint32_t timeout = (screen == SCREEN_STOPWATCH && swRunning)
-                         ? STOPWATCH_TIMEOUT_MS
-                         : SCREEN_TIMEOUT_MS;
-  if (screenOn && now - lastActivity > timeout) {
-    screenOn = false;
-    digitalWrite(TFT_BL, LOW);
-  }
+  // Keep the screen on continuously
+  screenOn = true;
+  digitalWrite(TFT_BL, HIGH);
+
+  // // Screen timeout (longer while the stopwatch is running)
+  // uint32_t timeout = (screen == SCREEN_STOPWATCH && swRunning)
+  //                        ? STOPWATCH_TIMEOUT_MS
+  //                        : SCREEN_TIMEOUT_MS;
+  // if (screenOn && now - lastActivity > timeout) {
+  //   screenOn = false;
+  //   digitalWrite(TFT_BL, LOW);
+  // }
 
   // Draw only while the screen is on
   if (screenOn) {
