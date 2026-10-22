@@ -30,6 +30,7 @@ The existing `platformio.ini` is retained, including its pinned `espressif32@6.9
 
 ## Notes
 
-- The watch advertises as `DIY Watch`; pair it with the iPhone in Bluetooth settings.
+- I made the SVGs for the GC9A01 and the ESP32 so sorry if they look trash
+- The watch advertises as `Solomon's ESP32 Watch`; pair it with the iPhone in Bluetooth settings.
 - AMS metadata is best-effort. BLE media-key controls can still work if AMS track information is unavailable.
 - `src/secrets.h` is ignored by Git. Do not commit Wi-Fi credentials.
