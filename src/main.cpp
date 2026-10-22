@@ -10,60 +10,51 @@
 //   Music      : B = choose control, A = send it, hold B = next screen
 //
 // Music remote: the watch appears to the iPhone as a Bluetooth media-key
-// accessory called "Solomon's ESP32 Watch". Pair it once in Settings > Bluetooth.
+// accessory called "DIY Watch". Pair it once in Settings > Bluetooth.
+// Track info (title, artist, play state) is read from the iPhone through
+// Apple Media Service (AMS). If that fails, the remote still works.
 
-// P.S. : Variables are specified as [xyz...] in the comments for readability
-// P.S. : [#include <...>] normally refers to a library or system header, while [#include "..."] normally searches for a local project header first.
+#include <Arduino.h>
+#include <WiFi.h>
+#include <TFT_eSPI.h>
+#include <time.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEClient.h>
+#include <BLEUtils.h>
+#include <BLEHIDDevice.h>
+#include <BLESecurity.h>
+#include <BLEAdvertising.h>
+#include "secrets.h"  // WIFI_SSID and WIFI_PASS live here
 
-#include <Arduino.h>                            // Arduino functions e.g. pinMode(), digitalRead(), millis(), delay() and Serial
-#include <WiFi.h>                               // Connects to a wireless network and obtains network information
-#include <TFT_eSPI.h>                           // Controls the TFT display (the GC9A01), draws shapes and text, and manages sprites
-#include <time.h>                               // Provides time_t, struct tm, strftime() and time conversion functions
-#include <BLEDevice.h>                          // Initialises the ESP32 Bluetooth Low Energy stack
-#include <BLEServer.h>                          // Creates a BLE peripheral server and connection callbacks
-#include <BLEUtils.h>                           // Provides BLE utilities and related definitions
-#include <BLEHIDDevice.h>                       // Implements the Bluetooth Human Interface Device service
-#include <BLESecurity.h>                        // Configures BLE pairing and bonding behaviour
-#include "secrets.h"                            // WIFI_SSID and WIFI_PASS live here
+// UK time with automatic BST/GMT switching
+const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0";
 
-// UK time with automatic BST/GMT switching between the 3rd Sunday of March (M3) and the last Sunday of October (M10)
-const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0"; 
+const uint8_t  PIN_BTN_A = 4;
+const uint8_t  PIN_BTN_B = 5;
+const uint32_t DEBOUNCE_MS = 30;
+const uint32_t LONG_PRESS_MS = 800;
+const uint32_t SCREEN_TIMEOUT_MS = 5000;          // normal screen-off delay
+const uint32_t STOPWATCH_TIMEOUT_MS = 15000;      // longer while timing
 
-// P.S.: [uint8_t] is an 8-bit unsigned int for 0-255 while uint32_t is a 32-bit unsigned int for 0–4,294,967,295
+TFT_eSPI tft = TFT_eSPI();
+TFT_eSprite spr = TFT_eSprite(&tft);  // full-screen buffer in PSRAM
 
-const uint8_t  PIN_BTN_A = 4;                     // Button A connected to GPIO 4
-const uint8_t  PIN_BTN_B = 5;                     // Button B connected to GPIO 5
-const uint32_t DEBOUNCE_MS = 30;                  // Wait for the button signal to settle  <=========|
-const uint32_t LONG_PRESS_MS = 800;               // Duration required for a long press    <=========|----------> In milliseconds
-const uint32_t SCREEN_TIMEOUT_MS = 5000;          // normal screen-off delay               <=========|
-const uint32_t STOPWATCH_TIMEOUT_MS = 15000;      // longer while timing                   <=========|
-
-TFT_eSPI tft = TFT_eSPI();                        // Constructs a C++ TFT_eSPI object named tft that provides operations like [tft.init()], [tft.setRotation(0);], [tft.fillScreen(TFT_BLACK);] and [tft.drawString("Hello", 120, 120, 2);]
-
-TFT_eSprite spr = TFT_eSprite(&tft);              /* A sprite is an off-screen drawing buffer. 
-                                                    Here it is associated with the physical display using [&tft], which passes the address of the [tft] object.
-                                                    Instead of drawing each shape directly to the display as it is calculated,
-                                                    the program draws a complete screen into the sprite and then transfers it with:*/
-
-const int CX = 120;                               // <=====|---------> (CX, CY) is the centre of the GC9A01 display, which is a 240 x 240 display
-const int CY = 120;                               // <=====|
+const int CX = 120;
+const int CY = 120;
 
 // ---------------------------------------------------------------- buttons
 
-enum BtnEvent { EV_NONE, EV_DOWN, EV_SHORT, EV_LONG };  /* [BtnEvent] defines a set of named integer constants
-                                                           (default values of {0, 1, 2, 3})
-                                                           that identify different button events 
-                                                           {No new event, button press, button released quickly, button held for >= 800ms}*/
+enum BtnEvent { EV_NONE, EV_DOWN, EV_SHORT, EV_LONG };
 
-// Struct group [Button] related variables into a single data type.
 struct Button {
-  uint8_t  pin;         // GPIO number associated with the button
-  bool     lastRaw;     // Most recently observed electrical state, after interpreting LOW as pressed
-  bool     stable;      // Last debounced state accepted by the program
-  uint32_t lastChange;  // Time at which the raw signal most recently changed
-  uint32_t pressedAt;   // Time at which the press became a stable, recognised press.
-  bool     longFired;   // Prevents the long-press event from firing repeatedly during one hold.
-  bool     consume;     // Suppresses the remaining events from a press used to wake the screen.
+  uint8_t  pin;
+  bool     lastRaw;
+  bool     stable;
+  uint32_t lastChange;
+  uint32_t pressedAt;
+  bool     longFired;
+  bool     consume;   // swallow the rest of this press (used when it woke the screen)
 };
 
 Button btnA = {PIN_BTN_A, false, false, 0, 0, false, false};
@@ -129,7 +120,7 @@ static void stopwatchReset() {
 
 // ------------------------------------------------- music remote (BLE HID)
 
-#define BLE_DEVICE_NAME "Solomon's ESP32 Watch"
+#define BLE_DEVICE_NAME "DIY Watch"
 
 // HID report: Consumer Control, report ID 1, one byte of 5 button bits.
 static const uint8_t mediaReportMap[] = {
@@ -163,17 +154,222 @@ BLEServer*         bleServer = nullptr;
 BLEHIDDevice*      bleHid = nullptr;
 BLECharacteristic* mediaInput = nullptr;
 volatile bool      bleConnected = false;
+volatile uint32_t  bleConnectedAt = 0;
+BLEAddress         phoneAddress("00:00:00:00:00:00");
+
+// ---- Apple Media Service (AMS): now-playing info from the iPhone ----------
+// The iPhone hosts AMS; the watch connects back to it as a GATT client over
+// the same Bluetooth link and subscribes to track / playback updates.
+
+#define AMS_SERVICE_UUID        "89D3502B-0F36-433A-8EF4-C502AD55F8DC"
+#define AMS_ENTITY_UPDATE_UUID  "2F7CABCE-808D-411F-9A0C-BB92BA96C102"
+
+// Same service UUID in on-air (little-endian) byte order. Advertising it as
+// a "service solicitation" is what makes iOS expose AMS to the watch.
+static const uint8_t AMS_SOLICIT_UUID_LE[16] = {
+  0xDC, 0xF8, 0x55, 0xAD, 0x02, 0xC5, 0xF4, 0x8E,
+  0x3A, 0x43, 0x36, 0x0F, 0x2B, 0x50, 0xD3, 0x89};
+
+const uint8_t ENTITY_PLAYER = 0;
+const uint8_t ENTITY_TRACK = 2;
+const uint8_t PLAYER_ATTR_PLAYBACK_INFO = 1;  // "state,rate,elapsedSeconds"
+const uint8_t TRACK_ATTR_ARTIST = 0;
+const uint8_t TRACK_ATTR_TITLE = 2;
+const uint8_t TRACK_ATTR_DURATION = 3;
+
+enum AmsStatus { AMS_IDLE, AMS_WAITING, AMS_CONNECTING, AMS_READY, AMS_FAILED };
+volatile int      amsStatus = AMS_IDLE;
+volatile uint32_t amsStartedAt = 0;
+volatile int      amsTries = 0;
+BLEClient*        amsClient = nullptr;
+
+struct NowPlaying {
+  char     title[80];
+  char     artist[64];
+  float    duration;       // seconds
+  float    elapsed;        // seconds, as of elapsedAtMs
+  float    rate;           // 1.0 while playing
+  int      state;          // 0 paused, 1 playing, 2 rewinding, 3 fast-forwarding
+  uint32_t elapsedAtMs;
+  bool     haveTrack;
+  bool     havePlayback;
+};
+
+NowPlaying np = {};                              // written by BLE callbacks
+portMUX_TYPE npMux = portMUX_INITIALIZER_UNLOCKED;  // guards np
+
+static void clearNowPlaying() {
+  portENTER_CRITICAL(&npMux);
+  memset(&np, 0, sizeof(np));
+  portEXIT_CRITICAL(&npMux);
+}
+
+// Titles arrive as UTF-8; the display fonts are ASCII-only. Turn common
+// accented letters and punctuation into plain equivalents, others into '?'.
+static void asciiFold(const char* in, char* out, size_t outSize) {
+  static const char latin1[] =  // U+00C0 .. U+00FF
+      "AAAAAAACEEEEIIIIDNOOOOO*OUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+  size_t o = 0;
+  const uint8_t* p = (const uint8_t*)in;
+  while (*p && o + 4 < outSize) {
+    uint8_t c = *p;
+    if (c < 0x80) {
+      out[o++] = (c < 32) ? ' ' : (char)c;
+      p++;
+    } else if (c == 0xC3 && p[1] >= 0x80 && p[1] <= 0xBF) {
+      out[o++] = latin1[p[1] - 0x80];
+      p += 2;
+    } else if (c == 0xE2 && p[1] == 0x80 && p[2] != 0) {
+      uint8_t d = p[2];
+      if (d == 0x98 || d == 0x99) out[o++] = '\'';
+      else if (d == 0x9C || d == 0x9D) out[o++] = '"';
+      else if (d == 0x93 || d == 0x94) out[o++] = '-';
+      else if (d == 0xA6) { out[o++] = '.'; out[o++] = '.'; out[o++] = '.'; }
+      else out[o++] = '?';
+      p += 3;
+    } else {
+      out[o++] = '?';
+      do { p++; } while ((*p & 0xC0) == 0x80);  // skip rest of the character
+    }
+  }
+  out[o] = 0;
+}
+
+// Notification from the iPhone: [entity, attribute, flags, value...]
+static void onEntityUpdate(BLERemoteCharacteristic*, uint8_t* data, size_t len, bool) {
+  if (len < 3) return;
+  uint8_t entity = data[0];
+  uint8_t attr = data[1];
+
+  char value[96];
+  size_t n = len - 3;
+  if (n > sizeof(value) - 1) n = sizeof(value) - 1;
+  memcpy(value, data + 3, n);
+  value[n] = 0;
+
+  if (entity == ENTITY_PLAYER && attr == PLAYER_ATTR_PLAYBACK_INFO) {
+    int state = 0;
+    float rate = 0, elapsed = 0;
+    if (sscanf(value, "%d,%f,%f", &state, &rate, &elapsed) >= 1) {
+      portENTER_CRITICAL(&npMux);
+      np.state = state;
+      np.rate = rate;
+      np.elapsed = elapsed;
+      np.elapsedAtMs = millis();
+      np.havePlayback = true;
+      portEXIT_CRITICAL(&npMux);
+    }
+  } else if (entity == ENTITY_TRACK) {
+    char clean[96];
+    asciiFold(value, clean, sizeof(clean));
+    portENTER_CRITICAL(&npMux);
+    if (attr == TRACK_ATTR_TITLE) {
+      strlcpy(np.title, clean, sizeof(np.title));
+      np.haveTrack = (np.title[0] != 0);
+    } else if (attr == TRACK_ATTR_ARTIST) {
+      strlcpy(np.artist, clean, sizeof(np.artist));
+    } else if (attr == TRACK_ATTR_DURATION) {
+      np.duration = atof(value);
+    }
+    portEXIT_CRITICAL(&npMux);
+  }
+}
+
+// One attempt to connect back to the iPhone's AMS and subscribe to updates.
+static bool amsConnectOnce() {
+  if (!amsClient) amsClient = BLEDevice::createClient();
+
+  if (!amsClient->isConnected()) {
+    Serial.println("AMS: connecting back to phone...");
+    if (!amsClient->connect(phoneAddress, BLE_ADDR_TYPE_RANDOM)) {
+      if (!bleConnected) return false;
+      if (!amsClient->connect(phoneAddress, BLE_ADDR_TYPE_PUBLIC)) {
+        Serial.println("AMS: connect failed");
+        return false;
+      }
+    }
+  }
+
+  // Re-run service discovery each attempt (iOS may expose AMS only after bonding)
+  amsClient->getServices();
+  BLERemoteService* svc = amsClient->getService(BLEUUID(AMS_SERVICE_UUID));
+  if (!svc) {
+    Serial.println("AMS: service not found");
+    return false;
+  }
+  BLERemoteCharacteristic* upd = svc->getCharacteristic(BLEUUID(AMS_ENTITY_UPDATE_UUID));
+  if (!upd) {
+    Serial.println("AMS: entity update characteristic not found");
+    return false;
+  }
+
+  // Order matters: subscribe to notifications first, then say what we want.
+  upd->registerForNotify(onEntityUpdate);
+  const uint8_t wantPlayer[] = {ENTITY_PLAYER, PLAYER_ATTR_PLAYBACK_INFO};
+  const uint8_t wantTrack[] = {ENTITY_TRACK, TRACK_ATTR_ARTIST, TRACK_ATTR_TITLE,
+                               TRACK_ATTR_DURATION};
+  upd->writeValue((uint8_t*)wantPlayer, sizeof(wantPlayer), true);
+  upd->writeValue((uint8_t*)wantTrack, sizeof(wantTrack), true);
+  Serial.println("AMS: ready");
+  return true;
+}
+
+// Runs in its own task so a slow or stuck Bluetooth call never freezes the UI.
+static void amsTask(void*) {
+  for (;;) {
+    if (!bleConnected || amsStatus == AMS_READY) {
+      vTaskDelay(pdMS_TO_TICKS(400));
+      continue;
+    }
+    // Give pairing / link encryption a few seconds to settle after connecting
+    if (millis() - bleConnectedAt < 3000) {
+      vTaskDelay(pdMS_TO_TICKS(200));
+      continue;
+    }
+
+    amsStatus = AMS_CONNECTING;
+    amsStartedAt = millis();
+    bool ok = amsConnectOnce();
+    if (!bleConnected) continue;  // link dropped meanwhile; callback reset the state
+
+    if (ok) {
+      amsTries = 0;
+      amsStatus = AMS_READY;
+    } else {
+      amsTries++;
+      amsStatus = (amsTries >= 3) ? AMS_FAILED : AMS_WAITING;
+      vTaskDelay(pdMS_TO_TICKS(amsTries >= 3 ? 15000 : 5000));
+    }
+  }
+}
 
 class BleServerCallbacks : public BLEServerCallbacks {
-  void onConnect(BLEServer*) override { bleConnected = true; }
+  void onConnect(BLEServer*, esp_ble_gatts_cb_param_t* param) override {
+    phoneAddress = BLEAddress(param->connect.remote_bda);
+    bleConnectedAt = millis();
+    amsTries = 0;
+    amsStatus = AMS_WAITING;
+    bleConnected = true;
+  }
   void onDisconnect(BLEServer*) override {
     bleConnected = false;
+    amsStatus = AMS_IDLE;
+    clearNowPlaying();
     BLEDevice::startAdvertising();  // stay discoverable so the iPhone reconnects
   }
 };
 
+static void addAmsSolicitation(BLEAdvertisementData& d) {
+  std::string data;
+  data.push_back((char)17);    // length: 1 type byte + 16 UUID bytes
+  data.push_back((char)0x15);  // type: list of 128-bit service solicitation UUIDs
+  data.append((const char*)AMS_SOLICIT_UUID_LE, 16);
+  d.addData(data);
+}
+
 static void startBle() {
   BLEDevice::init(BLE_DEVICE_NAME);
+  BLEDevice::setMTU(185);  // room for longer song titles in one notification
   bleServer = BLEDevice::createServer();
   bleServer->setCallbacks(new BleServerCallbacks());
 
@@ -189,13 +385,24 @@ static void startBle() {
   bleHid->reportMap((uint8_t*)mediaReportMap, sizeof(mediaReportMap));
   bleHid->startServices();
 
+  // Advertising packet: flags, appearance, HID service.
+  // Scan response: name + the AMS solicitation (too big to fit in one packet).
+  BLEAdvertisementData advData;
+  advData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
+  advData.setAppearance(0x03C0);  // generic HID device
+  advData.setCompleteServices(bleHid->hidService()->getUUID());
+  BLEAdvertisementData scanData;
+  scanData.setName(BLE_DEVICE_NAME);
+  addAmsSolicitation(scanData);
+
   BLEAdvertising* adv = bleServer->getAdvertising();
-  adv->setAppearance(0x03C0);  // generic HID device
-  adv->addServiceUUID(bleHid->hidService()->getUUID());
-  adv->setScanResponse(false);
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanData);
   adv->start();
 
   bleHid->setBatteryLevel(100);
+
+  xTaskCreate(amsTask, "ams", 8192, nullptr, 1, nullptr);
 }
 
 // Press and release one media key. Returns false if no iPhone is connected.
@@ -326,8 +533,10 @@ static void drawStopwatch() {
   spr.pushSprite(0, 0);
 }
 
-// One control icon on the Music screen
-static void drawMusicIcon(int idx, int x, int y, bool selected, bool flashing) {
+// One control icon on the Music screen.
+// playState: 1 = playing (show pause), 0 = paused (show play), -1 = unknown.
+static void drawMusicIcon(int idx, int x, int y, bool selected, bool flashing,
+                          int playState) {
   if (flashing) spr.fillCircle(x, y, 16, musicFlashOk ? TFT_DARKGREEN : TFT_MAROON);
   if (selected) {
     spr.drawCircle(x, y, 18, TFT_YELLOW);
@@ -344,9 +553,16 @@ static void drawMusicIcon(int idx, int x, int y, bool selected, bool flashing) {
       spr.fillRect(x - 9, y - 8, 3, 17, c);
       break;
     case 2:  // play / pause
-      spr.fillTriangle(x - 10, y - 8, x - 10, y + 8, x, y, c);
-      spr.fillRect(x + 4, y - 8, 3, 17, c);
-      spr.fillRect(x + 9, y - 8, 3, 17, c);
+      if (playState == 1) {          // playing: offer pause
+        spr.fillRect(x - 6, y - 8, 4, 17, c);
+        spr.fillRect(x + 3, y - 8, 4, 17, c);
+      } else if (playState == 0) {   // paused: offer play
+        spr.fillTriangle(x - 6, y - 9, x - 6, y + 9, x + 8, y, c);
+      } else {                       // unknown: show both
+        spr.fillTriangle(x - 10, y - 8, x - 10, y + 8, x, y, c);
+        spr.fillRect(x + 4, y - 8, 3, 17, c);
+        spr.fillRect(x + 9, y - 8, 3, 17, c);
+      }
       break;
     case 3:  // next
       spr.fillTriangle(x - 7, y - 8, x - 7, y + 8, x + 5, y, c);
@@ -359,35 +575,115 @@ static void drawMusicIcon(int idx, int x, int y, bool selected, bool flashing) {
   }
 }
 
+// Shorten text with "..." until it fits in maxW pixels (out must hold >= 100 bytes)
+static void fitText(const char* src, int font, int maxW, char* out, size_t outSize) {
+  strlcpy(out, src, outSize);
+  if (spr.textWidth(out, font) <= maxW) return;
+  char tmp[104];
+  size_t n = strlen(out);
+  while (n > 1) {
+    n--;
+    out[n] = 0;
+    snprintf(tmp, sizeof(tmp), "%s...", out);
+    if (spr.textWidth(tmp, font) <= maxW) {
+      strlcpy(out, tmp, outSize);
+      return;
+    }
+  }
+}
+
 static void drawMusic() {
+  NowPlaying s;
+  portENTER_CRITICAL(&npMux);
+  s = np;
+  portEXIT_CRITICAL(&npMux);
+
+  bool linked = bleConnected;
+  int st = amsStatus;
+  if (st == AMS_CONNECTING && millis() - amsStartedAt > 25000) st = AMS_FAILED;
+  bool showTrack = linked && s.haveTrack;
+  int playState = (showTrack && s.havePlayback) ? (s.state == 1 ? 1 : 0) : -1;
+
   spr.fillSprite(TFT_BLACK);
   spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
   spr.setTextDatum(MC_DATUM);
 
-  spr.setTextColor(TFT_CYAN, TFT_BLACK);
-  spr.drawString("MUSIC", CX, 45, 2);
+  // Header: connection / playback state
+  const char* head;
+  uint16_t headColor;
+  if (!linked)               { head = "NOT CONNECTED"; headColor = TFT_ORANGE; }
+  else if (playState == 1)   { head = "PLAYING";       headColor = TFT_GREEN; }
+  else if (playState == 0)   { head = "PAUSED";        headColor = TFT_YELLOW; }
+  else                       { head = "MUSIC";         headColor = TFT_CYAN; }
+  spr.setTextColor(headColor, TFT_BLACK);
+  spr.drawString(head, CX, 36, 2);
 
-  spr.setTextColor(bleConnected ? TFT_GREEN : TFT_ORANGE, TFT_BLACK);
-  spr.drawString(bleConnected ? "iPhone connected" : "Not connected", CX, 68, 2);
+  char buf[100];
+  if (!linked) {
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    spr.drawString("Pair \"DIY Watch\" in", CX, 72, 2);
+    spr.drawString("iPhone Bluetooth settings", CX, 92, 2);
+  } else if (showTrack) {
+    // Title: big if it fits, otherwise smaller and shortened
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    int tf = (spr.textWidth(s.title, 4) <= 200) ? 4 : 2;
+    fitText(s.title, tf, 200, buf, sizeof(buf));
+    spr.drawString(buf, CX, 66, tf);
 
+    // Artist
+    spr.setTextColor(TFT_CYAN, TFT_BLACK);
+    fitText(s.artist, 2, 200, buf, sizeof(buf));
+    spr.drawString(buf, CX, 94, 2);
+
+    // Progress bar and times
+    float el = s.elapsed;
+    if (s.state == 1) el += s.rate * (millis() - s.elapsedAtMs) / 1000.0f;
+    if (s.duration > 0 && el > s.duration) el = s.duration;
+    if (el < 0) el = 0;
+
+    const int barX = 50, barW = 140, barY = 112;
+    spr.fillRect(barX, barY, barW, 4, TFT_DARKGREY);
+    if (s.duration > 0) {
+      int w = (int)(barW * (el / s.duration));
+      if (w > barW) w = barW;
+      spr.fillRect(barX, barY, w, 4, playState == 1 ? TFT_GREEN : TFT_YELLOW);
+    }
+    int e = (int)el, d = (int)s.duration;
+    if (d > 0) snprintf(buf, sizeof(buf), "%d:%02d / %d:%02d", e / 60, e % 60, d / 60, d % 60);
+    else       snprintf(buf, sizeof(buf), "%d:%02d", e / 60, e % 60);
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(buf, CX, 126, 2);
+  } else {
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    if (st == AMS_READY) {
+      spr.drawString("Nothing playing", CX, 72, 2);
+      spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      spr.drawString("Start music on iPhone", CX, 94, 2);
+    } else if (st == AMS_FAILED) {
+      spr.drawString("Controls only", CX, 72, 2);
+      spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      spr.drawString("Track info unavailable", CX, 94, 2);
+    } else {
+      spr.drawString("Loading track info...", CX, 72, 2);
+    }
+  }
+
+  // Control icons
   uint32_t now = millis();
   for (int i = 0; i < MUSIC_COUNT; i++) {
     bool flashing = (i == musicFlashIdx) && (now - musicFlashAt < 250);
-    drawMusicIcon(i, 40 + i * 40, 120, i == musicSel, flashing);
+    drawMusicIcon(i, 40 + i * 40, 156, i == musicSel, flashing, playState);
   }
 
+  const char* label = MUSIC_NAMES[musicSel];
+  if (musicSel == 2 && playState == 1) label = "Pause";
+  else if (musicSel == 2 && playState == 0) label = "Play";
   spr.setTextColor(TFT_WHITE, TFT_BLACK);
-  spr.drawString(MUSIC_NAMES[musicSel], CX, 156, 2);
+  spr.drawString(label, CX, 186, 2);
 
   spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  if (bleConnected) {
-    spr.drawString("A: send  B: select", CX, 188, 2);
-    spr.drawString("hold B: next screen", CX, 206, 2);
-  } else {
-    spr.drawString("Pair \"ESP32 Watch\" in", CX, 188, 2);
-    spr.drawString("iPhone Bluetooth", CX, 206, 2);
-    spr.drawString("hold B: exit", CX, 224, 2);
-  }
+  spr.drawString("A: send  B: select", CX, 206, 2);
+  spr.drawString("hold B: exit", CX, 222, 2);
 
   spr.pushSprite(0, 0);
 }
