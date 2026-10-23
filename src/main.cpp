@@ -1,34 +1,14 @@
-// DIY smartwatch - screens: analogue, digital, stopwatch, music remote
-//
-// Display (ESP32-S3 -> GC9A01): 3V3->VCC, GND->GND, 12->SCL, 11->SDA,
-//                               10->CS, 9->DC, 8->RST, 7->BL
-// Buttons: GPIO 4 = button A, GPIO 5 = button B (other leg of each to GND)
-//
-// Controls:
-//   B (short)  : next screen
-//   Stopwatch  : A = start / stop, hold A = reset
-//   Music      : B = choose control, A = send it, hold B = next screen
-//
-// Music remote: the watch appears to the iPhone as a Bluetooth media-key
-// accessory called "DIY Watch". Pair it once in Settings > Bluetooth.
-// Track info (title, artist, play state) is read from the iPhone through
-// Apple Media Service (AMS). If that fails, the remote still works.
+// DIY smartwatch application coordinator.
+// Hardware wiring and button behaviour are documented in Wiring/.
 
 #include <Arduino.h>
-#include <WiFi.h>
-#include <TFT_eSPI.h>
-#include <time.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEClient.h>
-#include <BLEUtils.h>
-#include <BLEHIDDevice.h>
-#include <BLESecurity.h>
-#include <BLEAdvertising.h>
-#include "secrets.h"  // WIFI_SSID and WIFI_PASS live here
 
-// UK time with automatic BST/GMT switching
-const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0";
+#include "AppConfig.h"
+#include "Buttons.h"
+#include "Stopwatch.h"
+#include "Clock.h"
+#include "Display.h"
+#include "MusicRemote.h"
 
 const uint8_t  PIN_BTN_A = 4;
 const uint8_t  PIN_BTN_B = 5;
@@ -717,148 +697,112 @@ void setup() {
   Serial.begin(115200);
   delay(500);
 
-  pinMode(PIN_BTN_A, INPUT_PULLUP);
-  pinMode(PIN_BTN_B, INPUT_PULLUP);
+  buttonsBegin();
+  stopwatchBegin();
 
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
-
-  tft.init();
-  tft.setRotation(0);
-  status("Starting...");
-
-  spr.setColorDepth(16);
-  spr.setAttribute(PSRAM_ENABLE, 1);
-  if (!spr.createSprite(240, 240)) {
-    status("Sprite alloc failed");
+  if (!displayBegin()) {
+    displayStatus("Sprite alloc failed");
     while (true) delay(1000);
   }
 
-  status("Connecting WiFi...");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  uint32_t start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
-    delay(250);
-  }
+  displayStatus("Starting...");
+  clockBegin();
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("IP %s  GW %s  DNS %s  RSSI %d\n",
-                  WiFi.localIP().toString().c_str(),
-                  WiFi.gatewayIP().toString().c_str(),
-                  WiFi.dnsIP().toString().c_str(),
-                  WiFi.RSSI());
-
-    status("Syncing time...");
-    configTzTime(TZ_INFO, "time.cloudflare.com", "pool.ntp.org", "time.google.com");
-    struct tm t;
-    bool synced = false;
-    for (int i = 0; i < 3 && !synced; i++) {
-      synced = getLocalTime(&t, 10000);
-      Serial.printf("NTP attempt %d: %s\n", i + 1, synced ? "ok" : "timeout");
-    }
-    if (!synced) {
-      status("NTP sync failed");
-      delay(2000);
-    }
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-  } else {
-    status("WiFi failed");
-    delay(2000);
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);  // keep the radio quiet so Bluetooth has it to itself
-  }
-
-  status("Starting Bluetooth...");
-  startBle();
+  displayStatus("Starting Bluetooth...");
+  musicRemoteBegin();
 
   lastActivity = millis();
   screenOn = true;
   needRedraw = true;
 }
 
-// ------------------------------------------------------------------ loop
-
 void loop() {
-  uint32_t now = millis();
+  const uint32_t now = millis();
 
   BtnEvent evA = updateButton(btnA);
   BtnEvent evB = updateButton(btnB);
 
-  // Wake on any press. The rest of that press is ignored, so waking
-  // the screen never also triggers an action.
+  // Wake on any press; consume that press so waking cannot trigger an action.
   bool wokeNow = false;
   if ((evA == EV_DOWN || evB == EV_DOWN) && !screenOn) {
     screenOn = true;
     wokeNow = true;
     needRedraw = true;
-    digitalWrite(TFT_BL, HIGH);
+    displaySetBacklight(true);
     if (evA == EV_DOWN) btnA.consume = true;
     if (evB == EV_DOWN) btnB.consume = true;
   }
-  if (evA != EV_NONE || evB != EV_NONE) lastActivity = now;
 
-  // Actions (only when the screen was already on)
+  if (evA != EV_NONE || evB != EV_NONE) {
+    lastActivity = now;
+  }
+
+  // Actions only run if the screen was already on at the start of the press.
   if (screenOn && !wokeNow) {
     if (screen == SCREEN_MUSIC) {
-      // Music: B picks a control, A sends it, hold B leaves the screen
+      // Music: short B selects a control, short A sends it, long B exits.
       if (evB == EV_SHORT) {
-        musicSel = (musicSel + 1) % MUSIC_COUNT;
+        musicSelectNext();
         needRedraw = true;
       }
       if (evB == EV_LONG) {
-        screen = (Screen)((screen + 1) % SCREEN_COUNT);
+        screen = static_cast<Screen>((screen + 1) % SCREEN_COUNT);
         needRedraw = true;
       }
       if (evA == EV_SHORT) {
-        musicSend(musicSel);
+        musicRemoteSend(musicSelected());
         needRedraw = true;
       }
     } else {
       if (evB == EV_SHORT) {
-        screen = (Screen)((screen + 1) % SCREEN_COUNT);
+        screen = static_cast<Screen>((screen + 1) % SCREEN_COUNT);
         needRedraw = true;
       }
       if (screen == SCREEN_STOPWATCH) {
-        if (evA == EV_SHORT) { stopwatchToggle(); needRedraw = true; }
-        if (evA == EV_LONG)  { stopwatchReset();  needRedraw = true; }
+        if (evA == EV_SHORT) {
+          stopwatchToggle();
+          needRedraw = true;
+        }
+        if (evA == EV_LONG) {
+          stopwatchReset();
+          needRedraw = true;
+        }
       }
     }
   }
 
-  // Keep the screen on continuously
+  // Intentionally keeps the display on continuously
   screenOn = true;
-  digitalWrite(TFT_BL, HIGH);
+  displaySetBacklight(true);
 
-  // // Screen timeout (longer while the stopwatch is running)
-  // uint32_t timeout = (screen == SCREEN_STOPWATCH && swRunning)
-  //                        ? STOPWATCH_TIMEOUT_MS
-  //                        : SCREEN_TIMEOUT_MS;
-  // if (screenOn && now - lastActivity > timeout) {
-  //   screenOn = false;
-  //   digitalWrite(TFT_BL, LOW);
-  // }
+  /*
+  const uint32_t timeout =
+      (screen == SCREEN_STOPWATCH && swRunning)
+          ? STOPWATCH_TIMEOUT_MS
+          : SCREEN_TIMEOUT_MS;
 
-  // Draw only while the screen is on
+  if (screenOn && now - lastActivity > timeout) {
+    screenOn = false;
+    displaySetBacklight(false);
+  }
+  */
+
   if (screenOn) {
     static int lastSec = -1;
     static uint32_t lastDraw = 0;
 
     if (screen == SCREEN_ANALOGUE || screen == SCREEN_DIGITAL) {
-      time_t nowT = time(nullptr);
-      struct tm t;
-      localtime_r(&nowT, &t);
+      const time_t nowT = time(nullptr);
+      struct tm localTimeInfo;
+      localtime_r(&nowT, &localTimeInfo);
 
-      if (needRedraw || t.tm_sec != lastSec) {
-        lastSec = t.tm_sec;
-
+      if (needRedraw || localTimeInfo.tm_sec != lastSec) {
+        lastSec = localTimeInfo.tm_sec;
         if (screen == SCREEN_ANALOGUE) {
-          drawClock(t);
+          drawClock(localTimeInfo);
         } else {
-          drawDigitalClock(t);
+          drawDigitalClock(localTimeInfo);
         }
-
         needRedraw = false;
       }
     } else if (screen == SCREEN_STOPWATCH) {
@@ -867,7 +811,7 @@ void loop() {
         drawStopwatch();
         needRedraw = false;
       }
-    } else {  // SCREEN_MUSIC (refreshes ~4x/s for connection status + key flash)
+    } else {  // SCREEN_MUSIC: refresh connection state and key feedback at 4 Hz.
       if (needRedraw || now - lastDraw >= 250) {
         lastDraw = now;
         drawMusic();

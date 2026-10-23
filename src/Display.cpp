@@ -1,0 +1,287 @@
+#include <Arduino.h>
+#include <TFT_eSPI.h>
+#include <time.h>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+
+#include "AppConfig.h"
+#include "Display.h"
+#include "Stopwatch.h"
+#include "MusicRemote.h"
+
+static TFT_eSPI tft = TFT_eSPI();
+static TFT_eSprite spr = TFT_eSprite(&tft);
+
+static constexpr int CX = DISPLAY_CX;
+static constexpr int CY = DISPLAY_CY;
+
+bool displayBegin() {
+  pinMode(TFT_BL, OUTPUT);
+  digitalWrite(TFT_BL, HIGH);
+  tft.init();
+  tft.setRotation(0);
+
+  spr.setColorDepth(16);
+  spr.setAttribute(PSRAM_ENABLE, 1);
+  return spr.createSprite(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+}
+
+void displaySetBacklight(bool enabled) {
+  digitalWrite(TFT_BL, enabled ? HIGH : LOW);
+}
+
+static void drawHand(float angleDeg, int length, int width, uint16_t color) {
+  float a = (angleDeg - 90.0f) * DEG_TO_RAD;
+  int x = CX + (int)(cosf(a) * length);
+  int y = CY + (int)(sinf(a) * length);
+  spr.drawWideLine(CX, CY, x, y, width, color, TFT_BLACK);
+}
+
+static void drawFace() {
+  spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
+  for (int i = 0; i < 12; i++) {
+    float a = i * 30 * DEG_TO_RAD;
+    int r1 = (i % 3 == 0) ? 98 : 106;
+    int r2 = 114;
+    spr.drawWideLine(CX + sinf(a) * r1, CY - cosf(a) * r1,
+                     CX + sinf(a) * r2, CY - cosf(a) * r2,
+                     (i % 3 == 0) ? 4 : 2, TFT_WHITE, TFT_BLACK);
+  }
+}
+
+void drawClock(const struct tm& t) {
+  spr.fillSprite(TFT_BLACK);
+  drawFace();
+
+  char buf[24];
+  strftime(buf, sizeof(buf), "%a %d %b", &t);
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
+  spr.setTextDatum(MC_DATUM);
+  spr.drawString(buf, CX, 70, 2);
+
+  strftime(buf, sizeof(buf), "%H:%M", &t);
+  spr.setTextColor(TFT_WHITE, TFT_BLACK);
+  spr.drawString(buf, CX, 170, 4);
+
+  float secA = t.tm_sec * 6.0f;
+  float minA = t.tm_min * 6.0f + t.tm_sec * 0.1f;
+  float hrA  = (t.tm_hour % 12) * 30.0f + t.tm_min * 0.5f;
+  drawHand(hrA, 55, 6, TFT_WHITE);
+  drawHand(minA, 85, 4, TFT_WHITE);
+  drawHand(secA, 95, 2, TFT_RED);
+  spr.fillCircle(CX, CY, 6, TFT_RED);
+
+  spr.pushSprite(0, 0);
+}
+
+void drawDigitalClock(const struct tm& t) {
+  spr.fillSprite(TFT_BLACK);
+
+  // Date
+  char dateBuf[24];
+  strftime(dateBuf, sizeof(dateBuf), "%a %d %b", &t);
+
+  spr.setTextDatum(MC_DATUM);
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
+  spr.drawString(dateBuf, CX, 65, 2);
+
+  // Digital time
+  char timeBuf[12];
+  strftime(timeBuf, sizeof(timeBuf), "%H:%M:%S", &t);
+
+  spr.setTextColor(TFT_WHITE, TFT_BLACK);
+  spr.drawString(timeBuf, CX, 115, 4);
+
+  // Seconds indicator
+  spr.drawCircle(CX, 165, 5, TFT_GREEN);
+  spr.fillCircle(CX, 165, 3, TFT_GREEN);
+
+  spr.pushSprite(0, 0);
+}
+
+void drawStopwatch() {
+  uint32_t totalTenths = stopwatchElapsed() / 100;
+  unsigned tenths = totalTenths % 10;
+  unsigned secs = (totalTenths / 10) % 60;
+  unsigned mins = (totalTenths / 600) % 100;
+
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%02u:%02u.%u", mins, secs, tenths);
+
+  spr.fillSprite(TFT_BLACK);
+  spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
+  spr.setTextDatum(MC_DATUM);
+
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
+  spr.drawString("STOPWATCH", CX, 55, 2);
+
+  spr.setTextColor(swRunning ? TFT_GREEN : TFT_WHITE, TFT_BLACK);
+  spr.drawString(buf, CX, 120, 6);
+
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.drawString("A: start / stop", CX, 185, 2);
+  spr.drawString("hold A: reset", CX, 205, 2);
+
+  spr.pushSprite(0, 0);
+}
+
+// One control icon on the Music screen.
+// playState: 1 = playing (show pause), 0 = paused (show play), -1 = unknown.
+static void drawMusicIcon(int idx, int x, int y, bool selected, bool flashing,
+                          bool flashOk, int playState) {
+  if (flashing) spr.fillCircle(x, y, 16, flashOk ? TFT_DARKGREEN : TFT_MAROON);
+  if (selected) {
+    spr.drawCircle(x, y, 18, TFT_YELLOW);
+    spr.drawCircle(x, y, 19, TFT_YELLOW);
+  }
+  uint16_t c = TFT_WHITE;
+  switch (idx) {
+    case 0:  // volume down
+      spr.setTextColor(c);
+      spr.drawString("V-", x, y, 2);
+      break;
+    case 1:  // previous
+      spr.fillTriangle(x + 7, y - 8, x + 7, y + 8, x - 5, y, c);
+      spr.fillRect(x - 9, y - 8, 3, 17, c);
+      break;
+    case 2:  // play / pause
+      if (playState == 1) {          // playing: offer pause
+        spr.fillRect(x - 6, y - 8, 4, 17, c);
+        spr.fillRect(x + 3, y - 8, 4, 17, c);
+      } else if (playState == 0) {   // paused: offer play
+        spr.fillTriangle(x - 6, y - 9, x - 6, y + 9, x + 8, y, c);
+      } else {                       // unknown: show both
+        spr.fillTriangle(x - 10, y - 8, x - 10, y + 8, x, y, c);
+        spr.fillRect(x + 4, y - 8, 3, 17, c);
+        spr.fillRect(x + 9, y - 8, 3, 17, c);
+      }
+      break;
+    case 3:  // next
+      spr.fillTriangle(x - 7, y - 8, x - 7, y + 8, x + 5, y, c);
+      spr.fillRect(x + 6, y - 8, 3, 17, c);
+      break;
+    case 4:  // volume up
+      spr.setTextColor(c);
+      spr.drawString("V+", x, y, 2);
+      break;
+  }
+}
+
+// Shorten text with "..." until it fits in maxW pixels (out must hold >= 100 bytes)
+static void fitText(const char* src, int font, int maxW, char* out, size_t outSize) {
+  strlcpy(out, src, outSize);
+  if (spr.textWidth(out, font) <= maxW) return;
+  char tmp[104];
+  size_t n = strlen(out);
+  while (n > 1) {
+    n--;
+    out[n] = 0;
+    snprintf(tmp, sizeof(tmp), "%s...", out);
+    if (spr.textWidth(tmp, font) <= maxW) {
+      strlcpy(out, tmp, outSize);
+      return;
+    }
+  }
+}
+
+void drawMusic() {
+  MusicSnapshot s = musicRemoteSnapshot();
+
+  bool linked = s.connected;
+  int st = s.amsStatus;
+  if (st == AMS_CONNECTING && millis() - s.amsStartedAt > 25000) st = AMS_FAILED;
+  bool showTrack = linked && s.haveTrack;
+  int playState = (showTrack && s.havePlayback) ? (s.state == 1 ? 1 : 0) : -1;
+
+  spr.fillSprite(TFT_BLACK);
+  spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
+  spr.setTextDatum(MC_DATUM);
+
+  // Header: connection / playback state
+  const char* head;
+  uint16_t headColor;
+  if (!linked)               { head = "NOT CONNECTED"; headColor = TFT_ORANGE; }
+  else if (playState == 1)   { head = "PLAYING";       headColor = TFT_GREEN; }
+  else if (playState == 0)   { head = "PAUSED";        headColor = TFT_YELLOW; }
+  else                       { head = "MUSIC";         headColor = TFT_CYAN; }
+  spr.setTextColor(headColor, TFT_BLACK);
+  spr.drawString(head, CX, 36, 2);
+
+  char buf[100];
+  if (!linked) {
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    spr.drawString("Pair \"DIY Watch\" in", CX, 72, 2);
+    spr.drawString("iPhone Bluetooth settings", CX, 92, 2);
+  } else if (showTrack) {
+    // Title: big if it fits, otherwise smaller and shortened
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    int tf = (spr.textWidth(s.title, 4) <= 200) ? 4 : 2;
+    fitText(s.title, tf, 200, buf, sizeof(buf));
+    spr.drawString(buf, CX, 66, tf);
+
+    // Artist
+    spr.setTextColor(TFT_CYAN, TFT_BLACK);
+    fitText(s.artist, 2, 200, buf, sizeof(buf));
+    spr.drawString(buf, CX, 94, 2);
+
+    // Progress bar and times
+    float el = s.elapsed;
+    if (s.state == 1) el += s.rate * (millis() - s.elapsedAtMs) / 1000.0f;
+    if (s.duration > 0 && el > s.duration) el = s.duration;
+    if (el < 0) el = 0;
+
+    const int barX = 50, barW = 140, barY = 112;
+    spr.fillRect(barX, barY, barW, 4, TFT_DARKGREY);
+    if (s.duration > 0) {
+      int w = (int)(barW * (el / s.duration));
+      if (w > barW) w = barW;
+      spr.fillRect(barX, barY, w, 4, playState == 1 ? TFT_GREEN : TFT_YELLOW);
+    }
+    int e = (int)el, d = (int)s.duration;
+    if (d > 0) snprintf(buf, sizeof(buf), "%d:%02d / %d:%02d", e / 60, e % 60, d / 60, d % 60);
+    else       snprintf(buf, sizeof(buf), "%d:%02d", e / 60, e % 60);
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(buf, CX, 126, 2);
+  } else {
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    if (st == AMS_READY) {
+      spr.drawString("Nothing playing", CX, 72, 2);
+      spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      spr.drawString("Start music on iPhone", CX, 94, 2);
+    } else if (st == AMS_FAILED) {
+      spr.drawString("Controls only", CX, 72, 2);
+      spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      spr.drawString("Track info unavailable", CX, 94, 2);
+    } else {
+      spr.drawString("Loading track info...", CX, 72, 2);
+    }
+  }
+
+  // Control icons
+  uint32_t now = millis();
+  for (int i = 0; i < MUSIC_COUNT; i++) {
+    bool flashing = (i == s.flashIndex) && (now - s.flashAt < 250);
+    drawMusicIcon(i, 40 + i * 40, 156, i == s.selected, flashing, s.flashOk, playState);
+  }
+
+  const char* label = MUSIC_NAMES[s.selected];
+  if (s.selected == 2 && playState == 1) label = "Pause";
+  else if (s.selected == 2 && playState == 0) label = "Play";
+  spr.setTextColor(TFT_WHITE, TFT_BLACK);
+  spr.drawString(label, CX, 186, 2);
+
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.drawString("A: send  B: select", CX, 206, 2);
+  spr.drawString("hold B: exit", CX, 222, 2);
+
+  spr.pushSprite(0, 0);
+}
+
+void displayStatus(const char* msg) {
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  tft.setTextDatum(MC_DATUM);
+  tft.drawString(msg, CX, CY, 2);
+  Serial.println(msg);
+}
