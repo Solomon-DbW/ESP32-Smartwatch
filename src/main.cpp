@@ -76,6 +76,15 @@ void setup() {
 void loop() {
   uint32_t now = millis();
 
+#if LOOP_DIAG
+  static uint32_t lastLoopAt = 0;
+  if (lastLoopAt && now - lastLoopAt > 100) {
+    Serial.printf("[diag] loop stalled %u ms (ble=%d ams=%d screen=%d)\n",
+                  (unsigned)(now - lastLoopAt), (int)bleConnected, (int)amsStatus, (int)screen);
+  }
+  lastLoopAt = now;
+#endif
+
   BtnEvent evA = updateButton(btnA);
   BtnEvent evB = updateButton(btnB);
 
@@ -121,15 +130,21 @@ void loop() {
     }
   }
 
+#if SCREEN_SLEEP_ENABLED
   if (screenOn) {
     uint32_t timeout = (screen == SCREEN_STOPWATCH || screen == SCREEN_MUSIC)
                          ? STOPWATCH_TIMEOUT_MS : SCREEN_TIMEOUT_MS;
     if (now - lastActivity >= timeout) {
       screenOn = false;
+      tft.fillScreen(TFT_BLACK);   // blank it even if the backlight can't be switched
       digitalWrite(TFT_BL, LOW);
     }
   }
+#endif
 
+#if LOOP_DIAG
+  uint32_t drawStart = millis();
+#endif
   if (screenOn) {
     static int lastSec = -1;
     static uint32_t lastDraw = 0;
@@ -161,6 +176,11 @@ void loop() {
       }
     }
   }
+
+#if LOOP_DIAG
+  uint32_t drawMs = millis() - drawStart;
+  if (drawMs > 60) Serial.printf("[diag] slow draw %u ms (screen=%d)\n", (unsigned)drawMs, (int)screen);
+#endif
 
   delay(10);
 }

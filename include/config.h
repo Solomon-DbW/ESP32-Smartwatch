@@ -11,6 +11,14 @@
 // const char* TZ_INFO = "GMT0BST,M3.5.0/1,M10.5.0";
 extern const char* TZ_INFO;
 
+// Set to 1 to print loop stalls / slow draws to Serial (115200)
+#define LOOP_DIAG 0
+
+// Set to 1 to blank the screen after SCREEN_TIMEOUT_MS of no button presses.
+// Leave at 0 if the display backlight is not wired to TFT_BL (the screen would
+// otherwise just stop updating while still lit).
+#define SCREEN_SLEEP_ENABLED 0
+
 // hardware constants
 const uint8_t PIN_BTN_A = 4;
 const uint8_t PIN_BTN_B = 5;

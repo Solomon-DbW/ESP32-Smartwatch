@@ -258,7 +258,9 @@ void startBle() {
 
   bleHid->setBatteryLevel(100);
 
-  xTaskCreate(amsTask, "ams", 8192, nullptr, 1, nullptr);
+  // Pin to core 0 (the BLE core) so connect-back attempts never compete with the
+  // display loop, which runs on core 1.
+  xTaskCreatePinnedToCore(amsTask, "ams", 8192, nullptr, 1, nullptr, 0);
 }
 
 bool sendMediaKey(uint8_t mask) {
