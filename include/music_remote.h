@@ -36,6 +36,7 @@ extern volatile uint32_t amsStartedAt;
 extern volatile int amsTries;
 extern portMUX_TYPE npMux;
 extern NowPlaying np;
+extern BLEClient* amsClient;
 
 // HID consumer-control key bitmasks (match mediaReportMap in music_remote.cpp)
 constexpr uint8_t KEY_PLAY_PAUSE = 1 << 0;

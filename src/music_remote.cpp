@@ -1,4 +1,5 @@
 #include "music_remote.h"
+#include "ancs.h"
 
 static const uint8_t mediaReportMap[] = {
   0x05, 0x0C,
@@ -146,6 +147,10 @@ bool amsConnectOnce() {
   }
 
   amsClient->getServices();
+
+  // Notifications are independent of media info, so try them first.
+  ancsSubscribe(amsClient);
+
   BLERemoteService* svc = amsClient->getService(BLEUUID(AMS_SERVICE_UUID));
   if (!svc) {
     Serial.println("AMS: service not found");
@@ -172,8 +177,15 @@ bool amsConnectOnce() {
 
 void amsTask(void*) {
   for (;;) {
-    if (!bleConnected || amsStatus == AMS_READY) {
+    if (!bleConnected) {
       vTaskDelay(pdMS_TO_TICKS(400));
+      continue;
+    }
+
+    ancsPump();
+
+    if (amsStatus == AMS_READY) {
+      vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
 
@@ -212,6 +224,7 @@ class BleServerCallbacks : public BLEServerCallbacks {
     bleConnected = false;
     amsStatus = AMS_IDLE;
     clearNowPlaying();
+    ancsReset();
     BLEDevice::startAdvertising();
   }
 };

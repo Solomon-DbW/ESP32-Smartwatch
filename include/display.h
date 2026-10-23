@@ -3,6 +3,7 @@
 #include "config.h"
 #include "stopwatch.h"
 #include "music_remote.h"
+#include "notifications.h"
 #include "app_state.h"
 
 void drawHand(float angleDeg, int length, int width, uint16_t color);
@@ -13,4 +14,6 @@ void drawStopwatch();
 void drawMusicIcon(int idx, int x, int y, bool selected, bool flashing, int playState);
 void fitText(const char* src, int font, int maxW, char* out, size_t outSize);
 void drawMusic();
+void drawNotifications();
+void drawNotifBadge(int y);
 void status(const char* msg);

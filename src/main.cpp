@@ -2,6 +2,7 @@
 #include "buttons.h"
 #include "stopwatch.h"
 #include "music_remote.h"
+#include "notifications.h"
 #include "display.h"
 #include "app_state.h"
 
@@ -117,6 +118,15 @@ void loop() {
         musicSend(musicSel);
         needRedraw = true;
       }
+    } else if (screen == SCREEN_NOTIFS) {
+      if (evB == EV_SHORT) { notifNext(); needRedraw = true; }
+
+      if (evB == EV_LONG) {
+        screen = (Screen)((screen + 1) % SCREEN_COUNT);
+        needRedraw = true;
+      }
+
+      if (evA == EV_SHORT) { notifDismissSelected(); needRedraw = true; }
     } else {
       if (evB == EV_SHORT) {
         screen = (Screen)((screen + 1) % SCREEN_COUNT);
@@ -132,7 +142,7 @@ void loop() {
 
 #if SCREEN_SLEEP_ENABLED
   if (screenOn) {
-    uint32_t timeout = (screen == SCREEN_STOPWATCH || screen == SCREEN_MUSIC)
+    uint32_t timeout = (screen == SCREEN_STOPWATCH || screen == SCREEN_NOTIFS || screen == SCREEN_MUSIC)
                          ? STOPWATCH_TIMEOUT_MS : SCREEN_TIMEOUT_MS;
     if (now - lastActivity >= timeout) {
       screenOn = false;
@@ -166,6 +176,12 @@ void loop() {
       if (needRedraw || now - lastDraw >= 100) {
         lastDraw = now;
         drawStopwatch();
+        needRedraw = false;
+      }
+    } else if (screen == SCREEN_NOTIFS) {
+      if (needRedraw || now - lastDraw >= 250) {
+        lastDraw = now;
+        drawNotifications();
         needRedraw = false;
       }
     } else {

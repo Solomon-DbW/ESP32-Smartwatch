@@ -38,6 +38,7 @@ void drawClock(const struct tm& t) {
   strftime(buf, sizeof(buf), "%H:%M", &t);
   spr.setTextColor(TFT_WHITE, TFT_BLACK);
   spr.drawString(buf, CX, 170, 4);
+  drawNotifBadge(205);
 
   float secA = t.tm_sec * 6.0f;
   float minA = t.tm_min * 6.0f + t.tm_sec * 0.1f;
@@ -68,6 +69,7 @@ void drawDigitalClock(const struct tm& t) {
 
   spr.drawCircle(CX, 165, 5, TFT_GREEN);
   spr.fillCircle(CX, 165, 3, TFT_GREEN);
+  drawNotifBadge(200);
 
   spr.pushSprite(0, 0);
 }
@@ -244,6 +246,148 @@ void drawMusic() {
 
   spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
   spr.drawString("A: send  B: select", CX, 206, 2);
+  spr.drawString("hold B: exit", CX, 222, 2);
+
+  spr.pushSprite(0, 0);
+}
+
+void drawNotifBadge(int y) {
+  int n = notifUnread();
+  if (n <= 0) return;
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d new", n);
+  spr.setTextDatum(MC_DATUM);
+  spr.setTextColor(TFT_ORANGE, TFT_BLACK);
+  spr.drawString(buf, CX, y, 2);
+}
+
+// Greedy word wrap into at most maxLines lines; the last line gets "..." if text was cut.
+static int wrapText(const char* s, int font, int maxW, int maxLines, char lines[][40]) {
+  int n = 0;
+  char cur[40] = "";
+  size_t cl = 0;
+  bool dropped = false;
+  const char* p = s;
+
+  while (*p) {
+    while (*p == ' ') p++;
+    if (!*p) break;
+    const char* w = p;
+    while (*p && *p != ' ') p++;
+    size_t wl = p - w;
+
+    char test[40];
+    if (cl + 1 + wl < sizeof(test)) {
+      if (cl) snprintf(test, sizeof(test), "%s %.*s", cur, (int)wl, w);
+      else    snprintf(test, sizeof(test), "%.*s", (int)wl, w);
+      if (spr.textWidth(test, font) <= maxW) {
+        strlcpy(cur, test, sizeof(cur));
+        cl = strlen(cur);
+        continue;
+      }
+    }
+
+    if (cl) {                                   // flush the current line
+      strlcpy(lines[n++], cur, 40);
+      cur[0] = 0;
+      cl = 0;
+      if (n >= maxLines) { dropped = true; break; }
+    }
+
+    size_t k = (wl < sizeof(cur) - 1) ? wl : sizeof(cur) - 1;   // very long word: clip it
+    memcpy(cur, w, k);
+    cur[k] = 0;
+    while (k > 1 && spr.textWidth(cur, font) > maxW) cur[--k] = 0;
+    cl = k;
+  }
+  if (cl && n < maxLines) strlcpy(lines[n++], cur, 40);
+
+  if (dropped && n > 0) {
+    char* last = lines[n - 1];
+    size_t k = strlen(last);
+    char tmp[48];
+    for (;;) {
+      snprintf(tmp, sizeof(tmp), "%s...", last);
+      if (k == 0 || spr.textWidth(tmp, font) <= maxW) break;
+      last[--k] = 0;
+    }
+    strlcpy(last, tmp, 40);
+  }
+  return n;
+}
+
+void drawNotifications() {
+  Notif cur;
+  int idx = 0, total = 0;
+  bool have = notifSnapshot(cur, idx, total);
+  notifMarkAllRead();
+
+  bool linked = bleConnected;
+  int ast = ancsStatus;
+
+  spr.fillSprite(TFT_BLACK);
+  spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
+  spr.setTextDatum(MC_DATUM);
+
+  if (!linked) {
+    spr.setTextColor(TFT_ORANGE, TFT_BLACK);
+    spr.drawString("NOT CONNECTED", CX, 36, 2);
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    spr.drawString("Pair \"DIY Watch\" in", CX, 72, 2);
+    spr.drawString("iPhone Bluetooth settings", CX, 92, 2);
+  } else if (ast != ANCS_READY) {
+    spr.setTextColor(TFT_CYAN, TFT_BLACK);
+    spr.drawString("NOTIFICATIONS", CX, 36, 2);
+    spr.setTextColor(TFT_WHITE, TFT_BLACK);
+    if (ast == ANCS_IDLE) {
+      spr.drawString("Connecting...", CX, 90, 2);
+    } else {
+      spr.drawString("Not available", CX, 72, 2);
+      spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      spr.drawString("Turn on Show Notifications", CX, 96, 2);
+      spr.drawString("for DIY Watch in iPhone", CX, 114, 2);
+      spr.drawString("Bluetooth settings", CX, 132, 2);
+    }
+  } else if (!have) {
+    spr.setTextColor(TFT_CYAN, TFT_BLACK);
+    spr.drawString("NOTIFICATIONS", CX, 36, 2);
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString("No notifications", CX, 110, 2);
+  } else {
+    char buf[64];
+
+    // app name + time received
+    if (cur.at) {
+      struct tm t;
+      localtime_r(&cur.at, &t);
+      snprintf(buf, sizeof(buf), "%s  %02d:%02d", cur.app, t.tm_hour, t.tm_min);
+    } else {
+      snprintf(buf, sizeof(buf), "%s", cur.app);
+    }
+    char head[64];
+    fitText(buf, 2, 190, head, sizeof(head));
+    spr.setTextColor(TFT_CYAN, TFT_BLACK);
+    spr.drawString(cur.loaded ? head : "Loading...", CX, 40, 2);
+
+    if (cur.loaded) {
+      spr.setTextColor(TFT_WHITE, TFT_BLACK);
+      int tf = (spr.textWidth(cur.title, 4) <= 200) ? 4 : 2;
+      fitText(cur.title, tf, 200, buf, sizeof(buf));
+      spr.drawString(buf, CX, 70, tf);
+
+      char lines[4][40];
+      int n = wrapText(cur.msg, 2, 190, 4, lines);
+      spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      for (int i = 0; i < n; i++) spr.drawString(lines[i], CX, 102 + i * 18, 2);
+    }
+
+    snprintf(buf, sizeof(buf), "%d / %d", idx + 1, total);
+    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+    spr.drawString(buf, CX, 184, 2);
+  }
+
+  spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+  spr.drawString("A: clear  B: next", CX, 204, 2);
   spr.drawString("hold B: exit", CX, 222, 2);
 
   spr.pushSprite(0, 0);
