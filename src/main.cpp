@@ -120,7 +120,7 @@ static void stopwatchReset() {
 
 // ------------------------------------------------- music remote (BLE HID)
 
-#define BLE_DEVICE_NAME "DIY Watch"
+#define BLE_DEVICE_NAME "Solomon's ESP32 Watch"
 
 // HID report: Consumer Control, report ID 1, one byte of 5 button bits.
 static const uint8_t mediaReportMap[] = {
@@ -878,3 +878,4 @@ void loop() {
 
   delay(10);
 }
+
