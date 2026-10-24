@@ -1,6 +1,30 @@
 .pio/
 .vscode/
 include/secrets.h
+# PlatformIO / ESP32 build artifacts
+.pio
+.pioenvs
+.piolibdeps
+.vscode/
+.vscode/.browse.c_cpp.db*
+.vscode/ipch
+*.elf
+*.bin
+*.hex
+*.zip
+
+# Local config / secrets
 include/secrets.h
-include/secrets.h
-include/secrets.h
+**/secrets.h
+secrets.h
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Optional compiled outputs
+build/
+dist/
