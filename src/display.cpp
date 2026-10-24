@@ -71,7 +71,7 @@ void drawDigitalClock(const struct tm& t) {
   if (h12 == 0) h12 = 12;
   char ampmBuf[16];
   snprintf(ampmBuf, sizeof(ampmBuf), "%d:%02d %s", h12, t.tm_min, t.tm_hour < 12 ? "AM" : "PM");
-  spr.setTextColor(TFT_GREEN, TFT_BLACK);
+  spr.setTextColor(TFT_CYAN, TFT_BLACK);
   spr.drawString(ampmBuf, CX, 165, 4);
   drawNotifBadge(200);
 
