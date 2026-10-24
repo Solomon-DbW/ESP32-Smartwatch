@@ -133,6 +133,13 @@ void loop() {
         if (evA == EV_SHORT) { notifOpenSelected(); needRedraw = true; }
         if (evA == EV_LONG)  { notifDismissSelected(); needRedraw = true; }
       }
+    } else if (screen == SCREEN_FLASHLIGHT) {
+      if (evA == EV_SHORT) { toggleFlashlight(); needRedraw = true; }
+      if (evB == EV_SHORT) {
+        flashlightOn = false;                       // never leave it lit on another screen
+        screen = (Screen)((screen + 1) % SCREEN_COUNT);
+        needRedraw = true;
+      }
     } else {
       if (evB == EV_SHORT) {
         screen = (Screen)((screen + 1) % SCREEN_COUNT);
@@ -188,6 +195,11 @@ void loop() {
       if (needRedraw || now - lastDraw >= 250) {
         lastDraw = now;
         drawNotifications();
+        needRedraw = false;
+      }
+    } else if (screen == SCREEN_FLASHLIGHT) {
+      if (needRedraw) {
+        drawFlashlight();
         needRedraw = false;
       }
     } else {

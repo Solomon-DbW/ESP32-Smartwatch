@@ -5,6 +5,7 @@
 #include "music_remote.h"
 #include "notifications.h"
 #include "app_state.h"
+#include "flashlight.h"
 
 void drawHand(float angleDeg, int length, int width, uint16_t color);
 void drawFace();
