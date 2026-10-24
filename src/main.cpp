@@ -119,14 +119,20 @@ void loop() {
         needRedraw = true;
       }
     } else if (screen == SCREEN_NOTIFS) {
-      if (evB == EV_SHORT) { notifNext(); needRedraw = true; }
-
-      if (evB == EV_LONG) {
-        screen = (Screen)((screen + 1) % SCREEN_COUNT);
-        needRedraw = true;
+      if (notifDetail) {
+        // full-message view
+        if (evB == EV_SHORT) { notifPage++; needRedraw = true; }      // next page (wraps back to list)
+        if (evA == EV_SHORT || evB == EV_LONG) { notifDetail = false; needRedraw = true; }
+        if (evA == EV_LONG)  { notifDismissSelected(); needRedraw = true; }
+      } else {
+        if (evB == EV_SHORT) { notifNext(); needRedraw = true; }
+        if (evB == EV_LONG) {
+          screen = (Screen)((screen + 1) % SCREEN_COUNT);
+          needRedraw = true;
+        }
+        if (evA == EV_SHORT) { notifOpenSelected(); needRedraw = true; }
+        if (evA == EV_LONG)  { notifDismissSelected(); needRedraw = true; }
       }
-
-      if (evA == EV_SHORT) { notifDismissSelected(); needRedraw = true; }
     } else {
       if (evB == EV_SHORT) {
         screen = (Screen)((screen + 1) % SCREEN_COUNT);

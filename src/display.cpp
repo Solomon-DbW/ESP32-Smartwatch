@@ -67,8 +67,12 @@ void drawDigitalClock(const struct tm& t) {
   spr.setTextColor(TFT_WHITE, TFT_BLACK);
   spr.drawString(timeBuf, CX, 115, 4);
 
-  spr.drawCircle(CX, 165, 5, TFT_GREEN);
-  spr.fillCircle(CX, 165, 3, TFT_GREEN);
+  int h12 = t.tm_hour % 12;
+  if (h12 == 0) h12 = 12;
+  char ampmBuf[16];
+  snprintf(ampmBuf, sizeof(ampmBuf), "%d:%02d %s", h12, t.tm_min, t.tm_hour < 12 ? "AM" : "PM");
+  spr.setTextColor(TFT_GREEN, TFT_BLACK);
+  spr.drawString(ampmBuf, CX, 165, 4);
   drawNotifBadge(200);
 
   spr.pushSprite(0, 0);
@@ -324,6 +328,7 @@ void drawNotifications() {
 
   bool linked = bleConnected;
   int ast = ancsStatus;
+  bool inDetail = false;
 
   spr.fillSprite(TFT_BLACK);
   spr.drawCircle(CX, CY, 119, TFT_DARKGREY);
@@ -366,29 +371,71 @@ void drawNotifications() {
     }
     char head[64];
     fitText(buf, 2, 190, head, sizeof(head));
-    spr.setTextColor(TFT_CYAN, TFT_BLACK);
-    spr.drawString(cur.loaded ? head : "Loading...", CX, 40, 2);
 
-    if (cur.loaded) {
-      spr.setTextColor(TFT_WHITE, TFT_BLACK);
-      int tf = (spr.textWidth(cur.title, 4) <= 200) ? 4 : 2;
-      fitText(cur.title, tf, 200, buf, sizeof(buf));
-      spr.drawString(buf, CX, 70, tf);
-
-      char lines[4][40];
-      int n = wrapText(cur.msg, 2, 190, 4, lines);
-      spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
-      for (int i = 0; i < n; i++) spr.drawString(lines[i], CX, 102 + i * 18, 2);
+    // full-message view: wrap the whole text, show one page of lines at a time
+    static char dl[24][40];   // static: keeps ~1KB off the loop task's stack
+    const int perPage = 6;
+    int nLines = 0, pages = 1;
+    inDetail = notifDetail && cur.loaded;
+    if (inDetail) {
+      nLines = wrapText(cur.msg, 2, 190, 24, dl);
+      pages = (nLines + perPage - 1) / perPage;
+      if (pages < 1) pages = 1;
+      if (notifPage >= pages) {   // paged past the end: back to the list
+        notifDetail = false;
+        notifPage = 0;
+        inDetail = false;
+      }
     }
 
-    snprintf(buf, sizeof(buf), "%d / %d", idx + 1, total);
-    spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    spr.drawString(buf, CX, 184, 2);
+    if (inDetail) {
+      spr.setTextColor(TFT_CYAN, TFT_BLACK);
+      spr.drawString(head, CX, 34, 2);
+
+      spr.setTextColor(TFT_WHITE, TFT_BLACK);
+      fitText(cur.title, 2, 190, buf, sizeof(buf));
+      spr.drawString(buf, CX, 54, 2);
+
+      spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+      for (int i = 0; i < perPage; i++) {
+        int li = notifPage * perPage + i;
+        if (li >= nLines) break;
+        spr.drawString(dl[li], CX, 80 + i * 18, 2);
+      }
+
+      snprintf(buf, sizeof(buf), "%d / %d", notifPage + 1, pages);
+      spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      spr.drawString(buf, CX, 190, 2);
+    } else {
+      spr.setTextColor(TFT_CYAN, TFT_BLACK);
+      spr.drawString(cur.loaded ? head : "Loading...", CX, 40, 2);
+
+      if (cur.loaded) {
+        spr.setTextColor(TFT_WHITE, TFT_BLACK);
+        int tf = (spr.textWidth(cur.title, 4) <= 200) ? 4 : 2;
+        fitText(cur.title, tf, 200, buf, sizeof(buf));
+        spr.drawString(buf, CX, 70, tf);
+
+        char lines[4][40];
+        int n = wrapText(cur.msg, 2, 190, 4, lines);
+        spr.setTextColor(TFT_LIGHTGREY, TFT_BLACK);
+        for (int i = 0; i < n; i++) spr.drawString(lines[i], CX, 102 + i * 18, 2);
+      }
+
+      snprintf(buf, sizeof(buf), "%d / %d", idx + 1, total);
+      spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
+      spr.drawString(buf, CX, 184, 2);
+    }
   }
 
   spr.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  spr.drawString("A: clear  B: next", CX, 204, 2);
-  spr.drawString("hold B: exit", CX, 222, 2);
+  if (inDetail) {
+    spr.drawString("A: back  B: more", CX, 204, 2);
+    spr.drawString("hold A: clear", CX, 222, 2);
+  } else {
+    spr.drawString("A: open  B: next", CX, 204, 2);
+    spr.drawString("hold A: clear", CX, 222, 2);
+  }
 
   spr.pushSprite(0, 0);
 }

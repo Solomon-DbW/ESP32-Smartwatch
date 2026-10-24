@@ -28,7 +28,7 @@ static uint32_t dismissQ[QLEN];
 static int dismissHead = 0, dismissCount = 0;
 
 // Data Source reassembly (responses can span several notifications).
-static uint8_t dsBuf[512];
+static uint8_t dsBuf[768];
 static size_t dsLen = 0;
 static volatile uint32_t waitUid = 0;
 static volatile uint32_t waitSince = 0;
@@ -39,7 +39,11 @@ static void push(uint32_t* q, int& head, int& count, uint32_t uid) {
   portENTER_CRITICAL(&ancsMux);
   for (int i = 0; i < count; i++)
     if (q[(head + i) % QLEN] == uid) { portEXIT_CRITICAL(&ancsMux); return; }
-  if (count < QLEN) { q[(head + count) % QLEN] = uid; count++; }
+  // When full, drop the OLDEST entry: on connect the iPhone replays every pending
+  // notification oldest-first, and the newest ones are the ones we keep.
+  if (count == QLEN) { head = (head + 1) % QLEN; count--; }
+  q[(head + count) % QLEN] = uid;
+  count++;
   portEXIT_CRITICAL(&ancsMux);
 }
 
@@ -93,7 +97,10 @@ static bool parseDataSource() {
   if (dsLen < 5 || dsBuf[0] != CMD_GET_NOTIF_ATTRS) return false;
   uint32_t uid = dsBuf[1] | (dsBuf[2] << 8) | (dsBuf[3] << 16) | ((uint32_t)dsBuf[4] << 24);
 
-  char app[64] = "", title[64] = "", msg[128] = "";
+  // static: this only ever runs in the single BLE callback task, and it keeps
+  // these large buffers off that task's small stack
+  static char app[64], title[64], msg[448];
+  app[0] = title[0] = msg[0] = 0;
   uint8_t got = 0;
   size_t p = 5;
   while (p + 3 <= dsLen) {
@@ -115,7 +122,7 @@ static bool parseDataSource() {
   }
   if (got != 7) return false;
 
-  char appName[24], cleanTitle[64], cleanMsg[128];
+  static char appName[24], cleanTitle[64], cleanMsg[448];
   friendlyApp(app, appName, sizeof(appName));
   asciiFold(title, cleanTitle, sizeof(cleanTitle));
   asciiFold(msg, cleanMsg, sizeof(cleanMsg));
@@ -187,12 +194,17 @@ void ancsPump() {
     return;
   }
 
-  if (pop(fetchQ, fetchHead, fetchCount, uid)) {
+  // Skip UIDs that have already fallen out of the (10-entry) store or were cleared.
+  bool haveFetch = false;
+  while (pop(fetchQ, fetchHead, fetchCount, uid)) {
+    if (notifHas(uid)) { haveFetch = true; break; }
+  }
+  if (haveFetch) {
     uint8_t req[] = { CMD_GET_NOTIF_ATTRS,
                       (uint8_t)uid, (uint8_t)(uid >> 8), (uint8_t)(uid >> 16), (uint8_t)(uid >> 24),
                       ATTR_APP_ID,
                       ATTR_TITLE, 40, 0,
-                      ATTR_MESSAGE, 90, 0 };
+                      ATTR_MESSAGE, 0x90, 0x01 };   // up to 400 characters
     dsLen = 0;
     waitTries = (uid == lastReqUid) ? waitTries + 1 : 1;
     lastReqUid = uid;

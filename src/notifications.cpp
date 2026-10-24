@@ -6,6 +6,8 @@ static int notifCount = 0;
 static portMUX_TYPE notifMux = portMUX_INITIALIZER_UNLOCKED;
 
 int notifSel = 0;
+bool notifDetail = false;
+int notifPage = 0;
 volatile int ancsStatus = ANCS_IDLE;
 
 // Caller must hold notifMux.
@@ -27,6 +29,7 @@ void notifAdd(uint32_t uid, uint8_t category, uint8_t flags) {
     notifs[0].flags = flags;
     notifs[0].unread = !(flags & 0x04);   // pre-existing ones aren't "new"
     if (notifCount < NOTIF_MAX) notifCount++;
+    if (notifDetail) { notifDetail = false; notifPage = 0; }   // list shifted under the reader
     // keep the user's cursor on the same card when something is inserted above it
     if (notifSel > 0) notifSel = (notifSel + 1 < notifCount) ? notifSel + 1 : notifCount - 1;
   } else {
@@ -56,6 +59,8 @@ static void removeAt(int i) {
   notifCount--;
   memset(&notifs[notifCount], 0, sizeof(Notif));
   if (notifSel >= notifCount) notifSel = notifCount > 0 ? notifCount - 1 : 0;
+  notifDetail = false;
+  notifPage = 0;
 }
 
 void notifRemove(uint32_t uid) {
@@ -65,17 +70,28 @@ void notifRemove(uint32_t uid) {
   portEXIT_CRITICAL(&notifMux);
 }
 
+bool notifHas(uint32_t uid) {
+  portENTER_CRITICAL(&notifMux);
+  bool found = findUid(uid) >= 0;
+  portEXIT_CRITICAL(&notifMux);
+  return found;
+}
+
 void notifClear() {
   portENTER_CRITICAL(&notifMux);
   memset(notifs, 0, sizeof(notifs));
   notifCount = 0;
   notifSel = 0;
+  notifDetail = false;
+  notifPage = 0;
   portEXIT_CRITICAL(&notifMux);
 }
 
 void notifNext() {
   portENTER_CRITICAL(&notifMux);
   if (notifCount > 0) notifSel = (notifSel + 1) % notifCount;
+  notifDetail = false;
+  notifPage = 0;
   portEXIT_CRITICAL(&notifMux);
 }
 
@@ -90,6 +106,18 @@ void notifDismissSelected() {
   }
   portEXIT_CRITICAL(&notifMux);
   if (uid && canClearOnPhone) ancsQueueDismiss(uid);
+}
+
+bool notifOpenSelected() {
+  bool ok = false;
+  portENTER_CRITICAL(&notifMux);
+  if (notifCount > 0 && notifSel < notifCount && notifs[notifSel].loaded) {
+    notifDetail = true;
+    notifPage = 0;
+    ok = true;
+  }
+  portEXIT_CRITICAL(&notifMux);
+  return ok;
 }
 
 void notifMarkAllRead() {
