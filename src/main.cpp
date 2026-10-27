@@ -146,6 +146,11 @@ void loop() {
         needRedraw = true;
       }
 
+      if (screen == SCREEN_QUADCLOCK && evA == EV_SHORT) {
+        clock24h = !clock24h;                     // 12h <-> 24h
+        needRedraw = true;
+      }
+
       if (screen == SCREEN_STOPWATCH) {
         if (evA == EV_SHORT) { stopwatchToggle(); needRedraw = true; }
         if (evA == EV_LONG)  { stopwatchReset(); needRedraw = true; }
@@ -172,7 +177,7 @@ void loop() {
     static int lastSec = -1;
     static uint32_t lastDraw = 0;
 
-    if (screen == SCREEN_ANALOGUE || screen == SCREEN_DIGITAL) {
+    if (screen == SCREEN_ANALOGUE || screen == SCREEN_DIGITAL || screen == SCREEN_QUADCLOCK) {
       time_t nowT = time(nullptr);
       struct tm t;
       localtime_r(&nowT, &t);
@@ -181,6 +186,7 @@ void loop() {
         lastSec = t.tm_sec;
 
         if (screen == SCREEN_ANALOGUE) drawClock(t);
+        else if (screen == SCREEN_QUADCLOCK) drawQuadClock(t);
         else drawDigitalClock(t);
 
         needRedraw = false;

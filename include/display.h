@@ -6,6 +6,7 @@
 #include "notifications.h"
 #include "app_state.h"
 #include "flashlight.h"
+#include "quadclock.h"
 
 void drawHand(float angleDeg, int length, int width, uint16_t color);
 void drawFace();
