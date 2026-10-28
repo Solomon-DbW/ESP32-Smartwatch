@@ -14,9 +14,9 @@ static const int SEGMENT_GAP = 2;       // gap between segments
 static const int GAP_X = 8;         // distance from the vertical divider (x = 120)
 static const int GAP_Y = 6;         // distance from the horizontal divider (y = 120)
 
-static const uint16_t COL_HOUR = TFT_WHITE;
-static const uint16_t COL_MIN  = TFT_CYAN;
-static const uint16_t COL_OFF  = 0x2104;    // very dark grey: unlit segments
+static const uint16_t COLOUR_HOUR = TFT_WHITE;
+static const uint16_t COLOUR_MIN  = TFT_CYAN;
+static const uint16_t COLOUR_OFF  = 0x2104;    // very dark grey: unlit segments
 
 #define QC_SHOW_UNLIT 1                     // 0 = draw only the lit segments
 
@@ -51,7 +51,7 @@ static void drawDigit(int x, int y, int digit, uint16_t color) {
 #if !QC_SHOW_UNLIT
     if (!on) continue;
 #endif
-    spr.fillRoundRect(segs[i].x, segs[i].y, segs[i].w, segs[i].h, 3, on ? color : COL_OFF);
+    spr.fillRoundRect(segs[i].x, segs[i].y, segs[i].w, segs[i].h, 3, on ? color : COLOUR_OFF);
   }
 }
 
@@ -76,13 +76,13 @@ void drawQuadClock(const struct tm& t) {
 
   spr.fillSprite(TFT_BLACK);
 
-  drawDigit(leftX,  topY, hTens, COL_HOUR);          // top-left
-  drawDigit(rightX, topY, hOnes, COL_HOUR);          // top-right
-  drawDigit(leftX,  botY, mTens, COL_MIN);           // bottom-left
-  drawDigit(rightX, botY, mOnes, COL_MIN);           // bottom-right
+  drawDigit(leftX,  topY, hTens, COLOUR_HOUR);          // top-left
+  drawDigit(rightX, topY, hOnes, COLOUR_HOUR);          // top-right
+  drawDigit(leftX,  botY, mTens, COLOUR_MIN);           // bottom-left
+  drawDigit(rightX, botY, mOnes, COLOUR_MIN);           // bottom-right
 
   // blinking dot where the four quadrants meet (replaces the colon)
-  spr.fillCircle(CX, CY, 4, (t.tm_sec % 2 == 0) ? TFT_RED : COL_OFF);
+  spr.fillCircle(CX, CY, 4, (t.tm_sec % 2 == 0) ? TFT_RED : COLOUR_OFF);
 
   spr.setTextDatum(MC_DATUM);
 
