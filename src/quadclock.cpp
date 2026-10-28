@@ -4,13 +4,13 @@ bool clock24h = false;
 
 // ---- layout (all in screen pixels, 240 x 240 round display) -----------------
 //
-// Each digit is a 7-segment glyph in a DIG_W x DIG_H box tucked against the
+// Each digit is a 7-segment glyph in a DIGIT_W x DIGIT_H box tucked against the
 // centre cross. With these sizes every corner of every box is at most ~108 px
 // from the centre (120, 120), so the whole digit stays inside the visible circle.
-static const int DIG_W = 52;
-static const int DIG_H = 84;
-static const int SEG_T = 9;         // segment thickness
-static const int SEG_GAP = 2;       // gap between segments
+static const int DIGIT_W = 52;
+static const int DIGIT_H = 84;
+static const int SEGMENT_T = 9;         // segment thickness
+static const int SEGMENT_GAP = 2;       // gap between segments
 static const int GAP_X = 8;         // distance from the vertical divider (x = 120)
 static const int GAP_Y = 6;         // distance from the horizontal divider (y = 120)
 
@@ -27,7 +27,7 @@ static const uint8_t DIGIT_MASK[10] = {
 
 // Draw one digit. digit < 0 draws a blank (all segments unlit).
 static void drawDigit(int x, int y, int digit, uint16_t color) {
-  const int t = SEG_T, g = SEG_GAP, w = DIG_W, h = DIG_H;
+  const int t = SEGMENT_T, g = SEGMENT_GAP, w = DIGIT_W, h = DIGIT_H;
   const int hLen = w - 2 * t - 2 * g;                 // horizontal segment length
   const int vLen = h / 2 - (3 * t) / 2 - 2 * g;       // vertical segment length
   const int midY = y + h / 2 - t / 2;
@@ -69,9 +69,9 @@ void drawQuadClock(const struct tm& t) {
   int mOnes = t.tm_min % 10;
   if (!clock24h && hTens == 0) hTens = -1;           // no leading zero in 12-hour mode
 
-  const int leftX  = CX - GAP_X - DIG_W;             // 60
+  const int leftX  = CX - GAP_X - DIGIT_W;             // 60
   const int rightX = CX + GAP_X;                     // 128
-  const int topY   = CY - GAP_Y - DIG_H;             // 30
+  const int topY   = CY - GAP_Y - DIGIT_H;             // 30
   const int botY   = CY + GAP_Y;                     // 126
 
   spr.fillSprite(TFT_BLACK);
