@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This header declares the drawing functions used by the smartwatch UI.
+This header declares the drawing functions used by the watch UI. It includes both the original screen functions and the newer flashlight/quad-clock helpers.
 
 ## Syntax overview
 
@@ -14,6 +14,8 @@ This header declares the drawing functions used by the smartwatch UI.
 #include "music_remote.h"
 #include "notifications.h"
 #include "app_state.h"
+#include "flashlight.h"
+#include "quadclock.h"
 
 void drawHand(float angleDeg, int length, int width, uint16_t color);
 void drawFace();
@@ -28,15 +30,16 @@ void drawNotifBadge(int y);
 void status(const char* msg);
 ```
 
-## Usage pattern
+## Current repo behavior
 
-Most drawing functions are called from `src/main.cpp` when the watch is in a screen mode. For example:
+The draw API is now used by:
 
-```cpp
-if (screen == SCREEN_ANALOGUE) drawClock(t);
-else if (screen == SCREEN_STOPWATCH) drawStopwatch();
-```
+- analog clock
+- digital clock
+- quad-clock screen
+- stopwatch
+- notifications
+- music control panel
+- flashlight screen
 
-## Why it matters
-
-This is the interface between the app logic and the actual display rendering engine in `src/display.cpp`.
+The display header now references both the newer feature modules and the original UI functions.

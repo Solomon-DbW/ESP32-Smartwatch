@@ -1,6 +1,6 @@
 # ESP32-Smartwatch Documentation Index
 
-This folder contains per-file documentation for the ESP32-Smartwatch firmware. Each document explains the file's purpose, key symbols, expected syntax, and how it interacts with the rest of the project.
+This folder contains the current documentation for the ESP32-Smartwatch firmware. It reflects the latest repository state, including the newer flashlight and quad-clock screens.
 
 ## Project configuration
 
@@ -14,8 +14,10 @@ This folder contains per-file documentation for the ESP32-Smartwatch firmware. E
 - [include/buttons.h](./include-buttons.h.md)
 - [include/config.h](./include-config.h.md)
 - [include/display.h](./include-display.h.md)
+- [include/flashlight.h](./include-flashlight.h.md)
 - [include/music_remote.h](./include-music_remote.h.md)
 - [include/notifications.h](./include-notifications.h.md)
+- [include/quadclock.h](./include-quadclock.h.md)
 - [include/stopwatch.h](./include-stopwatch.h.md)
 
 ## Source files
@@ -25,30 +27,34 @@ This folder contains per-file documentation for the ESP32-Smartwatch firmware. E
 - [src/buttons.cpp](./src-buttons.cpp.md)
 - [src/config.cpp](./src-config.cpp.md)
 - [src/display.cpp](./src-display.cpp.md)
+- [src/flashlight.cpp](./src-flashlight.cpp.md)
 - [src/main.cpp](./src-main.cpp.md)
 - [src/music_remote.cpp](./src-music_remote.cpp.md)
 - [src/notifications.cpp](./src-notifications.cpp.md)
+- [src/quadclock.cpp](./src-quadclock.cpp.md)
 - [src/stopwatch.cpp](./src-stopwatch.cpp.md)
 
 ## Legacy reference
 
 - [old_src/main.cpp](./old_src-main.cpp.md)
 
-## Overall project model
+## Current project model
 
-This repository is an ESP32-S3 smartwatch firmware built in Arduino/C++ with PlatformIO. The design is intentionally modular:
+This repository is an ESP32-S3 smartwatch firmware built in Arduino/C++ with PlatformIO. The current design is modular and includes:
 
-- `include/*.h` defines the interfaces and shared state
-- `src/*.cpp` implements the behavior
-- `platformio.ini` configures the board and display hardware
-- `Wiring/` files document the hardware wiring
-- `old_src/` contains a legacy prototype
+- `include/*.h` for interfaces and global state
+- `src/*.cpp` for implementations
+- `platformio.ini` for board and display configuration
+- `Wiring/` for connector and hardware reference docs
+- `old_src/` for earlier prototype code
 
-The watch firmware does the following:
+The current watch firmware includes these features:
 
-- boots the display
-- reads two button inputs
-- connects to Wi‑Fi briefly for NTP time sync
-- starts BLE services
-- displays clock, stopwatch, music, and notification UIs
-- handles Apple Notification Center Service and media commands over BLE
+- digital and analog clock screens
+- a quad-clock screen with 12h/24h switching
+- stopwatch
+- iPhone notification mirroring over ANCS
+- music playback control and track display via BLE
+- flashlight mode
+- screen wake/sleep logic
+- low-level rendering with a sprite buffer and TFT_eSPI

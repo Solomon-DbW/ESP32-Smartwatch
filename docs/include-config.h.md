@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This is the core global configuration header for the project. It contains hardware constants, UI state declarations, button enum definitions, and watch screen definitions.
+This is the core global configuration header for the project. It contains hardware constants, UI state declarations, button enum definitions, and the active screen set for the current firmware.
 
 ## Syntax overview
 
@@ -48,9 +48,11 @@ struct Button {
 enum Screen {
   SCREEN_ANALOGUE,
   SCREEN_DIGITAL,
+  SCREEN_QUADCLOCK,
   SCREEN_STOPWATCH,
   SCREEN_NOTIFS,
   SCREEN_MUSIC,
+  SCREEN_FLASHLIGHT,
   SCREEN_COUNT
 };
 
@@ -60,13 +62,11 @@ extern bool needRedraw;
 extern uint32_t lastActivity;
 ```
 
-## Important notes
+## Important additions in the current repo
 
-- The file defines the watch’s button map and screen model.
-- `SCREEN_COUNT` is used to cycle through UI screens.
-- `screenOn` and `lastActivity` are used for screen sleep logic.
-- `CX` and `CY` define the center point of the circular display.
+The current version adds:
 
-## Why it matters
+- `SCREEN_QUADCLOCK` for a four-quadrant digital time layout
+- `SCREEN_FLASHLIGHT` for a white-screen flashlight mode
 
-This file centralizes the watch’s global behavior. Most modules depend on it directly or indirectly.
+The project also includes a newer screen cycle and a dedicated button flow for those screens.

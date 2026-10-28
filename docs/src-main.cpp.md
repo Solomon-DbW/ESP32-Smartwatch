@@ -2,73 +2,71 @@
 
 ## Purpose
 
-This is the central control file for the project. It initializes the device and contains the main runtime loop that manages the watch behavior.
+This is the runtime coordinator for the smartwatch. It initializes the device, connects to Wi‑Fi/NTP, starts BLE, and contains the main event loop for the watch.
 
-## Startup flow (`setup()`)
+## Current behavior
 
-```cpp
-void setup() {
-  Serial.begin(115200);
-  delay(500);
+The current `setup()` function still:
 
-  pinMode(PIN_BTN_A, INPUT_PULLUP);
-  pinMode(PIN_BTN_B, INPUT_PULLUP);
+- starts serial logging
+- configures the A/B GPIO buttons
+- initializes the display backlight
+- starts the TFT and sprite buffer
+- connects to Wi‑Fi and syncs time via NTP
+- starts BLE services
 
-  pinMode(TFT_BL, OUTPUT);
-  digitalWrite(TFT_BL, HIGH);
+The current `loop()` function now handles the newer screens:
 
-  tft.init();
-  tft.setRotation(0);
-  status("Starting...");
+- analogue clock
+- digital clock
+- quad-clock screen
+- stopwatch
+- notifications
+- music
+- flashlight
 
-  spr.setColorDepth(16);
-  spr.setAttribute(PSRAM_ENABLE, 1);
-  if (!spr.createSprite(240, 240)) {
-    status("Sprite alloc failed");
-    while (true) delay(1000);
-  }
-
-  // Wi‑Fi + time sync
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  ...
-
-  startBle();
-}
-```
-
-## Runtime loop (`loop()`) 
-
-The main loop does the following:
-
-- reads A/B button events
-- wakes the screen on input if needed
-- handles screen-specific button behavior
-- updates screen sleep timeout
-- redraws the current screen when required
-
-Example logic:
+## Notable current logic
 
 ```cpp
-BtnEvent evA = updateButton(btnA);
-BtnEvent evB = updateButton(btnB);
-
-if (screenOn && !wokeNow) {
-  if (screen == SCREEN_MUSIC) {
-    if (evB == EV_SHORT) {
-      musicSel = (musicSel + 1) % MUSIC_COUNT;
+if (screen == SCREEN_NOTIFS) {
+  if (notifDetail) {
+    if (evB == EV_SHORT) { notifPage++; needRedraw = true; }
+    if (evA == EV_SHORT || evB == EV_LONG) { notifDetail = false; needRedraw = true; }
+    if (evA == EV_LONG)  { notifDismissSelected(); needRedraw = true; }
+  } else {
+    if (evB == EV_SHORT) { notifNext(); needRedraw = true; }
+    if (evB == EV_LONG) {
+      screen = (Screen)((screen + 1) % SCREEN_COUNT);
       needRedraw = true;
     }
+    if (evA == EV_SHORT) { notifOpenSelected(); needRedraw = true; }
+    if (evA == EV_LONG)  { notifDismissSelected(); needRedraw = true; }
   }
 }
 ```
 
-## Screen logic
+This allows the user to browse notification list entries and then open a full-text detail view.
 
-- `SCREEN_ANALOGUE` and `SCREEN_DIGITAL` show the clock
-- `SCREEN_STOPWATCH` shows the timer
-- `SCREEN_NOTIFS` shows notifications
-- `SCREEN_MUSIC` shows music controls
+The newer screen logic also includes:
 
-## Why it matters
+```cpp
+else if (screen == SCREEN_FLASHLIGHT) {
+  if (evA == EV_SHORT) { toggleFlashlight(); needRedraw = true; }
+  if (evB == EV_SHORT) {
+    flashlightOn = false;
+    screen = (Screen)((screen + 1) % SCREEN_COUNT);
+    needRedraw = true;
+  }
+}
+```
 
-This file orchestrates the entire watch firmware. All modules ultimately feed into or are controlled by this loop.
+and:
+
+```cpp
+if (screen == SCREEN_QUADCLOCK && evA == EV_SHORT) {
+  clock24h = !clock24h;
+  needRedraw = true;
+}
+```
+
+These are the main repo updates that the earlier documentation did not include.
